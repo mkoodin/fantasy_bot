@@ -40,6 +40,7 @@ HELP_TEXT = (
     "<b>/trending</b> — most-added players across Sleeper right now\n"
     "<b>/player &lt;name&gt;</b> — outlook + availability + FAAB bid for any player\n"
     "<b>/startsit</b> — optimal lineup + start/sit calls for the week\n"
+    "<b>/trade</b> — find an ideal trade: fair deal + opening offer + how to pitch\n"
     "<b>/deep &lt;question&gt;</b> — force the flagship model for a big call\n"
     "<b>/gameday</b> — quick injury sweep of your starters\n"
     "<b>/reset</b> — clear conversation memory / start a fresh topic\n"
@@ -310,6 +311,25 @@ async def cmd_deep(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 @authorized_only
+async def cmd_trade(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Structured trade finder: /trade [player or team to focus on]."""
+    focus = " ".join(context.args).strip() if context.args else ""
+    question = (
+        "Find me the best trade in my league right now. Using the full rosters, "
+        "identify the ideal trade partner and which of my player(s) to send for "
+        "which of theirs, based on our complementary roster needs. Give me: "
+        "(1) the ideal target and the reasoning, (2) a FAIR, balanced proposal "
+        "both managers should be happy with, (3) a realistic OPENING OFFER to "
+        "send first — slightly in my favor to leave room to negotiate, and "
+        "(4) how to pitch it and what counter-offer to expect."
+    )
+    if focus:
+        question += f" Build the trade around: {focus}."
+    # Trades are multi-factor — always use the flagship model.
+    await _answer(update, context, question, deep=True)
+
+
+@authorized_only
 async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Clear the conversation memory to start a fresh topic."""
     context.chat_data.pop("qa_history", None)
@@ -500,6 +520,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("trending", cmd_trending))
     app.add_handler(CommandHandler("player", cmd_player))
     app.add_handler(CommandHandler("deep", cmd_deep))
+    app.add_handler(CommandHandler("trade", cmd_trade))
     app.add_handler(CommandHandler("reset", cmd_reset))
     app.add_handler(CommandHandler("diag", cmd_diag))
     app.add_handler(CommandHandler("startsit", cmd_startsit))
