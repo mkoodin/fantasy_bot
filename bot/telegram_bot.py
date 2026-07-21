@@ -317,6 +317,36 @@ async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 @authorized_only
+async def cmd_diag(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show what env vars the running process actually sees, and try to load
+    the league — for diagnosing deployment/config issues."""
+    def yn(v):
+        return "✅" if v else "❌ missing"
+
+    lines = [
+        "<b>Diagnostics — what the process sees</b>",
+        f"TELEGRAM_TOKEN: {yn(config.TELEGRAM_TOKEN)}",
+        f"TELEGRAM_CHAT_ID: {yn(config.TELEGRAM_CHAT_ID)}",
+        f"LEAGUE_ID: {yn(config.LEAGUE_ID)}"
+        + (f" <code>{digest.esc(config.LEAGUE_ID)}</code>" if config.LEAGUE_ID else ""),
+        f"SLEEPER_USER_ID: {yn(config.SLEEPER_USER_ID)}"
+        + (f" <code>{digest.esc(config.SLEEPER_USER_ID)}</code>" if config.SLEEPER_USER_ID else ""),
+        f"SLEEPER_USERNAME: {yn(config.SLEEPER_USERNAME)}",
+        f"SEASON: <code>{digest.esc(config.SEASON)}</code>",
+        f"XAI_API_KEY: {yn(config.XAI_API_KEY)}",
+    ]
+    try:
+        ctx = await _ctx(force=True)
+        lines.append(
+            f"\n✅ League loaded: <b>{digest.esc(ctx.league.get('name'))}</b> — "
+            f"your team: <b>{digest.esc(ctx.team_name(ctx.my_user_id))}</b>"
+        )
+    except Exception as exc:
+        lines.append(f"\n❌ League load failed: <code>{digest.esc(exc)}</code>")
+    await _send(update, "\n".join(lines))
+
+
+@authorized_only
 async def cmd_startsit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """On-demand start/sit: optimal lineup for the week."""
     await _typing(update)
@@ -471,6 +501,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("player", cmd_player))
     app.add_handler(CommandHandler("deep", cmd_deep))
     app.add_handler(CommandHandler("reset", cmd_reset))
+    app.add_handler(CommandHandler("diag", cmd_diag))
     app.add_handler(CommandHandler("startsit", cmd_startsit))
     app.add_handler(CommandHandler("gameday", cmd_gameday))
     # Any plain text that isn't a command → free-form Q&A. Registered last so
