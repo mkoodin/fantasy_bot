@@ -275,10 +275,19 @@ def team_context_summary(ctx: LeagueContext) -> str:
         else ""
     )
     flex_ct = sum(1 for s in starters if s in FLEX_ELIGIBILITY)
+    flex_elig: set[str] = set()
+    for s in starters:
+        flex_elig |= FLEX_ELIGIBILITY.get(s, set())
+    superflex = "QB" in flex_elig
     slot_extras = []
     if flex_ct:
-        slot_extras.append(f"{flex_ct} FLEX")
-    slot_extras.append("no kicker" if "K" not in starters else "kicker")
+        elig = "/".join(p for p in ("QB", "RB", "WR", "TE") if p in flex_elig)
+        slot_extras.append(f"{flex_ct} FLEX = {elig} only")
+    slot_extras.append("no kicker" if "K" not in starters else "starts a kicker")
+    slot_extras.append(
+        f"start exactly {starters.count('QB')} QB and {starters.count('DEF')} DEF"
+        + ("" if superflex else " (single-QB league, NOT superflex)")
+    )
 
     settings = ctx.league.get("settings") or {}
     p_start = settings.get("playoff_week_start")
@@ -296,7 +305,7 @@ def team_context_summary(ctx: LeagueContext) -> str:
     lines = [
         f"League: {ctx.league.get('name', 'League')} | {len(ctx.rosters)}-team | "
         f"{fmt} | Week {ctx.week} {ctx.season}{off}",
-        f"Starting slots: {', '.join(starters)} ({', '.join(slot_extras)})",
+        f"Starting slots: {', '.join(starters)} — {'; '.join(slot_extras)}",
     ]
     if playoff_line:
         lines.append(playoff_line)
