@@ -47,10 +47,13 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 # --- Sleeper ----------------------------------------------------------------
 # Provide either your username (bot resolves the id) and/or an explicit id.
 SLEEPER_USERNAME = os.getenv("SLEEPER_USERNAME")
-SLEEPER_USER_ID = os.getenv("SLEEPER_USER_ID")
+# These are public identifiers (not secrets), so they're baked in as defaults
+# for this league — the bot works even if the host's env vars aren't set.
+# Override via env vars to point at a different team/league.
+SLEEPER_USER_ID = os.getenv("SLEEPER_USER_ID", "1267645505593147392")  # Koodini
 # If you're in multiple leagues, pin the one you want. Otherwise the bot
 # uses the first league it finds for the season.
-LEAGUE_ID = os.getenv("LEAGUE_ID")
+LEAGUE_ID = os.getenv("LEAGUE_ID", "1251988282942685184")  # "Show me your TDs"
 SEASON = os.getenv("SEASON", str(datetime.now().year))
 
 # --- League strategy --------------------------------------------------------
