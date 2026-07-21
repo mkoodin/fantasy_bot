@@ -328,18 +328,47 @@ def league_rosters_context(ctx: LeagueContext) -> str:
     return "\n".join(lines)
 
 
+def scoring_context(ctx: LeagueContext) -> str:
+    """The league's exact scoring rules so Grok values players for THIS league
+    (e.g. 4-pt vs 6-pt pass TDs, PPR, TE premium, kicker/DEF quirks)."""
+    s = ctx.league.get("scoring_settings") or {}
+    if not s:
+        return ""
+    ppr = s.get("rec", 0)
+    fmt = (
+        "Full PPR" if ppr == 1 else "Half-PPR" if ppr == 0.5
+        else "Standard (no PPR)" if not ppr else f"{ppr}/reception"
+    )
+    notes = [fmt, f"pass TD {s.get('pass_td', 4)}pt"]
+    if s.get("bonus_rec_te"):
+        notes.append(f"TE premium +{s['bonus_rec_te']}/rec")
+    if any(s.get(k) for k in ("bonus_rec_fd", "bonus_rush_fd", "fd", "bonus_fd")):
+        notes.append("first-down bonus")
+    raw = ", ".join(f"{k}={v}" for k, v in sorted(s.items()) if v)
+    return (
+        "League scoring — weigh these in every valuation (PPR lifts pass-"
+        "catchers; low pass-TD points cool QBs; kicker/DEF rules affect "
+        "streaming): "
+        + ", ".join(notes)
+        + ".\n  Exact per-action points: "
+        + raw
+    )
+
+
 async def full_league_context(ctx: LeagueContext, client: SleeperClient) -> str:
     """The whole live picture for Grok: your team, all rosters, everyone's FAAB,
-    and the notable available free agents. Shared by Q&A and the digests."""
+    the league's exact scoring, and notable available free agents. Shared by
+    Q&A and the digests."""
     parts = [
         team_context_summary(ctx),
+        scoring_context(ctx),
         league_rosters_context(ctx),
         league_faab_context(ctx),
     ]
     fa = await available_fa_context(ctx, client)
     if fa:
         parts.append(fa)
-    return "\n\n".join(parts)
+    return "\n\n".join(p for p in parts if p)
 
 
 def league_faab_context(ctx: LeagueContext) -> str:
