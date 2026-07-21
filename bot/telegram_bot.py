@@ -285,9 +285,9 @@ async def _answer(
         deep = True
         grok_question = question + _DRAFT_DIRECTIVE
     await _typing(update)
-    note = "🔎 On it — searching X + news…"
+    note = "🔎 On it — analyzing your league + live X/news…"
     if deep:
-        note += " (deep analysis with grok-4.5 — this can take a minute or two)"
+        note += " (deep dive — this can take a minute or two)"
     await update.effective_chat.send_message(note)
 
     try:
@@ -402,7 +402,9 @@ async def cmd_diag(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def cmd_startsit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """On-demand start/sit: optimal lineup for the week."""
     await _typing(update)
-    await update.effective_chat.send_message("🔎 Setting your optimal lineup…")
+    await update.effective_chat.send_message(
+        "🔎 Setting your optimal lineup vs this week's matchup…"
+    )
     try:
         ctx = await _ctx()
         text = await digest.build_start_sit(ctx, client, final=False)
