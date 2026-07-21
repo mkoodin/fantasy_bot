@@ -164,7 +164,7 @@ def _post(instructions: str, user_content: str) -> dict:
             "Content-Type": "application/json",
         },
         json=body,
-        timeout=120,
+        timeout=config.GROK_TIMEOUT,
     )
     if resp.status_code != 200:
         raise RuntimeError(f"xAI {resp.status_code}: {resp.text[:300]}")
@@ -177,7 +177,23 @@ async def _run(instructions: str, user_content: str) -> Optional[dict]:
         return None
     try:
         data = await asyncio.to_thread(_post, instructions, user_content)
+    except requests.exceptions.Timeout:
+        return {
+            "text": "⚠️ That took too long to research. Try a more specific "
+            "question (one position or one decision) and ask again.",
+            "citations": [],
+        }
     except Exception as exc:  # network / auth / quota — surface, don't crash
+        low = str(exc).lower()
+        if "incorrect api key" in low or "401" in low or (
+            "400" in low and "api key" in low
+        ):
+            return {
+                "text": "⚠️ xAI rejected the API key. Check that XAI_API_KEY in "
+                "Railway → Variables matches your key exactly — no quotes, no "
+                "spaces, and the full string.",
+                "citations": [],
+            }
         return {"text": f"⚠️ Grok lookup failed: {exc}", "citations": []}
     text = _clean(_extract_text(data)) or "No usable response from Grok."
     return {"text": text, "citations": _extract_citations(data)}
