@@ -281,6 +281,20 @@ def league_rosters_context(ctx: LeagueContext) -> str:
     return "\n".join(lines)
 
 
+async def full_league_context(ctx: LeagueContext, client: SleeperClient) -> str:
+    """The whole live picture for Grok: your team, all rosters, everyone's FAAB,
+    and the notable available free agents. Shared by Q&A and the digests."""
+    parts = [
+        team_context_summary(ctx),
+        league_rosters_context(ctx),
+        league_faab_context(ctx),
+    ]
+    fa = await available_fa_context(ctx, client)
+    if fa:
+        parts.append(fa)
+    return "\n\n".join(parts)
+
+
 def league_faab_context(ctx: LeagueContext) -> str:
     """Each team's remaining FAAB, so bid advice accounts for who can outbid you
     (waivers go to the highest bidder)."""

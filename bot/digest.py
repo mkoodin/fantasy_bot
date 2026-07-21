@@ -190,6 +190,41 @@ def _roster_owner_name(ctx: analysis.LeagueContext, roster_id: Optional[int]) ->
     return "Someone"
 
 
+async def build_start_sit(
+    ctx: analysis.LeagueContext, client: SleeperClient, final: bool = False
+) -> str:
+    """Start/sit recommendations for the week. Friday version sets the optimal
+    lineup with close calls; the Sunday 'final' version is a last-minute check
+    focused on confirmed inactives and late injury news."""
+    title = "Sunday Final Lineup Check" if final else "Friday Start/Sit"
+    header = _header(ctx, title)
+    if not config.ENABLE_GROK:
+        # Fall back to a plain injury sweep when Grok isn't configured.
+        return await build_gameday_alert(ctx, client)
+
+    full_ctx = await analysis.full_league_context(ctx, client)
+    if final:
+        extra = (
+            " This is a final pre-kickoff check: prioritize confirmed inactives, "
+            "late injury designations, and weather, and give me any swaps to make "
+            "before the early games."
+        )
+    else:
+        extra = (
+            " Include close start/sit calls, favorable/tough matchups, and any "
+            "injuries or workload notes to monitor into the weekend."
+        )
+    question = (
+        f"Set my optimal starting lineup for Week {ctx.week}. Go slot by slot: "
+        "name who to start with a one-line why, then list the tough bench/close "
+        "calls I should double-check." + extra
+    )
+    result = await grok.answer_question(question, full_ctx, deep=True)
+    if not result:
+        return header + "\nNo response.\n"
+    return header + "\n" + esc(result["text"])
+
+
 async def build_gameday_alert(
     ctx: analysis.LeagueContext, client: SleeperClient
 ) -> str:

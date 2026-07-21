@@ -22,20 +22,30 @@ bids and drop suggestions — plus on-demand commands for any player.
 
 ## Commands
 
+Just **text the bot any question** — it answers with your full league loaded
+(roster, all 12 rosters, everyone's FAAB, available free agents) and remembers
+the last few turns, so follow-ups like *"in my league?"* work. Questions about
+trades / lineup optimization auto-upgrade to the flagship model.
+
 | Command | What it does |
 |---|---|
 | `/pre` | Pre-waiver digest (needs, FAAB bids, drops, live buzz) |
-| `/post` | Post-waiver digest (league recap + next targets) |
+| `/post` | Post-waiver digest (league recap + free-agent guide) |
 | `/waivers` | Hot free agents + suggested FAAB bids |
 | `/drops` | Droppable players on your roster |
 | `/roster` | Your team by position (injuries flagged) |
 | `/needs` | Where your roster is thin |
 | `/trending` | Most-added players across Sleeper right now |
-| `/player <name>` | Live X + news buzz on any player (Grok) |
-| `/gameday` | Injury sweep of your starters |
+| `/player <name>` | Outlook + availability in your league + FAAB bid |
+| `/startsit` | Optimal lineup + start/sit calls for the week |
+| `/deep <question>` | Force the flagship model for a big call |
+| `/gameday` | Quick injury sweep of your starters |
+| `/reset` | Clear conversation memory |
 
-Scheduled automatically: **pre-waiver** (Tue 8pm ET), **post-waiver**
-(Wed 9am ET), **gameday injury sweep** (Sun 11am ET). All configurable.
+Scheduled automatically (all ET, configurable): **pre-waiver** Mon 7pm,
+**post-waiver** Wed 6am, **start/sit** Fri 6:45pm, **last-minute start/sit**
+Sun 11:15am, plus a **live free-agent watch** every few hours (Sleeper-only,
+so it's free) that pings you when a hot pickup hits your wire.
 
 ## Setup
 

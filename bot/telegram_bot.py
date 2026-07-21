@@ -38,9 +38,10 @@ HELP_TEXT = (
     "<b>/roster</b> — your team, grouped by position (injuries flagged)\n"
     "<b>/needs</b> — where your roster is thin\n"
     "<b>/trending</b> — most-added players across Sleeper right now\n"
-    "<b>/player &lt;name&gt;</b> — live X + news buzz on any player (Grok)\n"
+    "<b>/player &lt;name&gt;</b> — outlook + availability + FAAB bid for any player\n"
+    "<b>/startsit</b> — optimal lineup + start/sit calls for the week\n"
     "<b>/deep &lt;question&gt;</b> — force the flagship model for a big call\n"
-    "<b>/gameday</b> — injury sweep of your starters\n"
+    "<b>/gameday</b> — quick injury sweep of your starters\n"
     "<b>/reset</b> — clear conversation memory / start a fresh topic\n"
     "<b>/help</b> — this message\n\n"
     "💬 <b>Or just text me any question</b> — e.g. \"who should I start at "
@@ -209,25 +210,15 @@ async def cmd_player(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if not name:
         await _send(update, "Usage: <code>/player Puka Nacua</code>")
         return
-    if not config.ENABLE_GROK:
-        await _send(
-            update,
-            "Grok isn't configured — set <code>XAI_API_KEY</code> to enable "
-            "live X + news lookups.",
-        )
-        return
-    await _typing(update)
-    result = await grok.analyze_player(name)
-    if not result:
-        await _send(update, "No response from Grok.")
-        return
-    text = f"🔎 <b>{digest.esc(name)}</b> — live X + news\n\n{digest.esc(result['text'])}"
-    cites = result.get("citations") or []
-    if cites:
-        text += "\n\n<b>Sources:</b>\n" + "\n".join(
-            f"• {digest.esc(c)}" for c in cites[:5]
-        )
-    await _send(update, text)
+    # Route through the full-context brain so the answer covers this-season
+    # value, availability in YOUR league, and a free-pickup vs. FAAB-bid call.
+    question = (
+        f"{name}: give me the fantasy outlook for this season and how "
+        "immediately they help, whether they're available in my league (free "
+        "pickup or waiver claim with a suggested winning FAAB bid), or if "
+        "rostered, who holds them."
+    )
+    await _answer(update, context, question, deep=False)
 
 
 # High-stakes questions worth the flagship model (multi-factor decisions).
@@ -268,12 +259,7 @@ async def _answer(
 
     try:
         ctx = await _ctx()
-        full_ctx = analysis.team_context_summary(ctx)
-        full_ctx += "\n\n" + analysis.league_rosters_context(ctx)
-        full_ctx += "\n\n" + analysis.league_faab_context(ctx)
-        fa_ctx = await analysis.available_fa_context(ctx, client)
-        if fa_ctx:
-            full_ctx += "\n\n" + fa_ctx
+        full_ctx = await analysis.full_league_context(ctx, client)
     except Exception:
         full_ctx = ""  # still answer, just without personalization
 
@@ -323,6 +309,19 @@ async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 @authorized_only
+async def cmd_startsit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """On-demand start/sit: optimal lineup for the week."""
+    await _typing(update)
+    await update.effective_chat.send_message("🔎 Setting your optimal lineup…")
+    try:
+        ctx = await _ctx()
+        text = await digest.build_start_sit(ctx, client, final=False)
+    except Exception as exc:
+        text = f"⚠️ Couldn't build start/sit: {digest.esc(exc)}"
+    await _send(update, text)
+
+
+@authorized_only
 async def cmd_gameday(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await _typing(update)
     try:
@@ -366,11 +365,63 @@ async def job_post(context: ContextTypes.DEFAULT_TYPE) -> None:
     await _push(context, await digest.build_post_waiver_digest(ctx, client))
 
 
+async def job_startsit(context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_day(config.STARTSIT_DAY):
+        return
+    ctx = await _ctx(force=True)
+    await _push(context, await digest.build_start_sit(ctx, client, final=False))
+
+
 async def job_gameday(context: ContextTypes.DEFAULT_TYPE) -> None:
     if not _is_day(config.GAMEDAY_DAY):
         return
     ctx = await _ctx(force=True)
-    await _push(context, await digest.build_gameday_alert(ctx, client))
+    # Sunday is the last-minute check: full start/sit weighted to late news.
+    await _push(context, await digest.build_start_sit(ctx, client, final=True))
+
+
+async def job_fa_watch(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Frequent, Grok-free scan: alert on newly-hot players available in the
+    league. Primes silently on first run so a redeploy doesn't re-announce
+    everything; then only surfaces genuinely new pickups. Quiet overnight."""
+    hour = datetime.now(config.TIMEZONE).hour
+    if hour < config.FA_WATCH_START_HOUR or hour >= config.FA_WATCH_END_HOUR:
+        return
+    try:
+        ctx = await _ctx(force=True)
+        recs = await analysis.faab_recommendations(ctx, client, limit=8)
+    except Exception as exc:
+        logger.warning("FA watch failed: %s", exc)
+        return
+
+    alerted: set = context.bot_data.setdefault("alerted_fa", set())
+    if not context.bot_data.get("fa_primed"):
+        context.bot_data["fa_primed"] = True
+        alerted.update(r["player_id"] for r in recs)
+        return
+
+    fresh = []
+    for r in recs:
+        pid = r["player_id"]
+        if pid in alerted:
+            continue
+        if r["fills_need"] or r["adds"] >= config.FA_WATCH_MIN_ADDS:
+            fresh.append(r)
+            alerted.add(pid)
+    if not fresh:
+        return
+
+    lines = ["🚨 <b>Hot free agent(s) on your wire</b>"]
+    for r in fresh[:5]:
+        p = r["player"]
+        star = "⭐" if r["fills_need"] else "•"
+        lines.append(
+            f"{star} <b>{digest.esc(player_name(p))}</b> "
+            f"({digest.esc(digest._pos_tag(p))}) — {r['adds']:,} adds, "
+            f"bid ~${r['bid']} <i>({digest.esc(r['reason'])})</i>"
+        )
+    lines.append("\n<i>/player &lt;name&gt; for the live read · /waivers for the full list.</i>")
+    await _push(context, "\n".join(lines))
 
 
 def _register_jobs(app: Application) -> None:
@@ -379,11 +430,20 @@ def _register_jobs(app: Application) -> None:
     # never depend on any library's day-index convention.
     jq.run_daily(job_pre, time=config.PRE_DIGEST_TIME, name="pre_waiver")
     jq.run_daily(job_post, time=config.POST_DIGEST_TIME, name="post_waiver")
-    jq.run_daily(job_gameday, time=config.GAMEDAY_TIME, name="gameday")
+    jq.run_daily(job_startsit, time=config.STARTSIT_TIME, name="friday_startsit")
+    jq.run_daily(job_gameday, time=config.GAMEDAY_TIME, name="sunday_final")
+    if config.FA_WATCH_ENABLED:
+        jq.run_repeating(
+            job_fa_watch,
+            interval=config.FA_WATCH_HOURS * 3600,
+            first=120,
+            name="fa_watch",
+        )
     logger.info(
-        "Scheduled jobs: pre=%s(day %s) post=%s(day %s) gameday=%s(day %s)",
+        "Scheduled: pre=%s(d%s) post=%s(d%s) startsit=%s(d%s) sunday=%s(d%s)",
         config.PRE_DIGEST_TIME, config.PRE_DIGEST_DAY,
         config.POST_DIGEST_TIME, config.POST_DIGEST_DAY,
+        config.STARTSIT_TIME, config.STARTSIT_DAY,
         config.GAMEDAY_TIME, config.GAMEDAY_DAY,
     )
 
@@ -403,6 +463,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("player", cmd_player))
     app.add_handler(CommandHandler("deep", cmd_deep))
     app.add_handler(CommandHandler("reset", cmd_reset))
+    app.add_handler(CommandHandler("startsit", cmd_startsit))
     app.add_handler(CommandHandler("gameday", cmd_gameday))
     # Any plain text that isn't a command → free-form Q&A. Registered last so
     # it never shadows the command handlers above.

@@ -102,15 +102,29 @@ ENABLE_GROK = bool(XAI_API_KEY)
 TIMEZONE = ZoneInfo(os.getenv("TIMEZONE", "America/New_York"))
 
 # Weekday indexes: Monday=0 ... Sunday=6 (matches datetime.weekday()).
-# Pre-waiver digest: night before waivers process (default Tuesday 8pm).
-PRE_DIGEST_DAY = int(os.getenv("PRE_DIGEST_DAY", "1"))       # Tuesday
-PRE_DIGEST_TIME = _parse_time(os.getenv("PRE_DIGEST_TIME", ""), "20:00")
-# Post-waiver digest: after waivers clear (default Wednesday 9am).
+# Pre-waiver bid plan + FAAB recs (default Monday 7pm).
+PRE_DIGEST_DAY = int(os.getenv("PRE_DIGEST_DAY", "0"))       # Monday
+PRE_DIGEST_TIME = _parse_time(os.getenv("PRE_DIGEST_TIME", ""), "19:00")
+# Post-waiver results + free-agent pickup guide (default Wednesday 6am).
 POST_DIGEST_DAY = int(os.getenv("POST_DIGEST_DAY", "2"))     # Wednesday
-POST_DIGEST_TIME = _parse_time(os.getenv("POST_DIGEST_TIME", ""), "09:00")
-# Gameday injury/inactive sweep (default Sunday 11am).
+POST_DIGEST_TIME = _parse_time(os.getenv("POST_DIGEST_TIME", ""), "06:00")
+# Main Start/Sit digest (default Friday 6:45pm).
+STARTSIT_DAY = int(os.getenv("STARTSIT_DAY", "4"))          # Friday
+STARTSIT_TIME = _parse_time(os.getenv("STARTSIT_TIME", ""), "18:45")
+# Sunday last-minute Start/Sit update (default Sunday 11:15am).
 GAMEDAY_DAY = int(os.getenv("GAMEDAY_DAY", "6"))             # Sunday
-GAMEDAY_TIME = _parse_time(os.getenv("GAMEDAY_TIME", ""), "11:00")
+GAMEDAY_TIME = _parse_time(os.getenv("GAMEDAY_TIME", ""), "11:15")
+
+# Live free-agent watch: periodically scan Sleeper trending adds and alert on
+# newly-hot players available in your league. Sleeper-only (no Grok cost) so it
+# can run often. Quiet outside the hour window to avoid overnight pings.
+FA_WATCH_ENABLED = os.getenv("FA_WATCH_ENABLED", "true").lower() in (
+    "1", "true", "yes", "on"
+)
+FA_WATCH_HOURS = float(os.getenv("FA_WATCH_HOURS", "4"))
+FA_WATCH_MIN_ADDS = int(os.getenv("FA_WATCH_MIN_ADDS", "4000"))
+FA_WATCH_START_HOUR = int(os.getenv("FA_WATCH_START_HOUR", "8"))
+FA_WATCH_END_HOUR = int(os.getenv("FA_WATCH_END_HOUR", "23"))
 
 # How long (seconds) to reuse cached league data across commands.
 CONTEXT_TTL = int(os.getenv("CONTEXT_TTL", "300"))
