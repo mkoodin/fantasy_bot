@@ -108,28 +108,42 @@ async def _drop_block(ctx: analysis.LeagueContext, client: SleeperClient) -> str
     return "\n".join(lines) + "\n"
 
 
-async def _grok_block(
-    ctx: analysis.LeagueContext, client: SleeperClient, top_n: int = 2
+async def _grok_pickup_analysis(
+    ctx: analysis.LeagueContext, client: SleeperClient
 ) -> str:
-    """Live X/news buzz for the top waiver targets (only if Grok is enabled)."""
+    """League-tuned analysis of the top available targets: which to prioritize
+    for THIS team's scoring/construction/playoff picture, refined bids, live
+    buzz, and who to drop. Replaces generic per-player buzz so the scheduled
+    digest reasons in your exact rules, not the raw market signal."""
     if not config.ENABLE_GROK:
         return ""
-    recs = await analysis.faab_recommendations(ctx, client, limit=top_n)
+    recs = await analysis.faab_recommendations(ctx, client, limit=6)
     if not recs:
         return ""
-    lines = ["\n<b>🔎 Live X + news buzz:</b>"]
-    for r in recs[:top_n]:
-        name = player_name(r["player"])
-        buzz = await grok.buzz_line(
-            name, extra_context=f"{r['position']} being added widely on waivers"
-        )
-        # Skip empties and error strings (e.g. no-credits/quota) so a Grok
-        # hiccup never dumps a raw error into the digest.
-        if buzz and not buzz.startswith("⚠️"):
-            lines.append(f"\n<b>{esc(name)}</b>\n{esc(buzz)}")
-    if len(lines) == 1:
+    targets = "; ".join(
+        f"{player_name(r['player'])} ({r['position']}, {r['adds']:,} adds/48h, "
+        f"market bid ${r['bid']}-{r['bid_high']})"
+        for r in recs
+    )
+    full_ctx = await analysis.full_league_context(ctx, client)
+    question = (
+        "These are this week's top trending-available pickups for my team: "
+        f"{targets}. Using MY exact scoring, roster construction (FLEX/QB/DEF "
+        "rules), current needs, remaining FAAB, and playoff picture, tell me "
+        "which 2-3 to actually prioritize and why they fit MY league (not "
+        "generic), refine the FAAB bid if the market number looks off, note any "
+        "to skip, and who on my roster to drop to make room. Add a quick live "
+        "buzz check on the top target. Keep it tight — a couple sentences per "
+        "priority pickup."
+    )
+    result = await grok.answer_question(question, full_ctx, deep=False)
+    if not result or result["text"].startswith("⚠️"):
         return ""
-    return "\n".join(lines) + "\n"
+    return (
+        "\n<b>🔎 Tuned pickup analysis (your scoring &amp; build):</b>\n"
+        + esc(result["text"])
+        + "\n"
+    )
 
 
 async def build_pre_waiver_digest(
@@ -142,7 +156,7 @@ async def build_pre_waiver_digest(
         await _drop_block(ctx, client),
     ]
     if with_buzz:
-        parts.append(await _grok_block(ctx, client, top_n=2))
+        parts.append(await _grok_pickup_analysis(ctx, client))
     parts.append(
         "\n<i>Bids are % of your remaining FAAB, weighted for needs. "
         "Adjust for how badly you want the player.</i>"
@@ -190,9 +204,10 @@ async def build_post_waiver_digest(
     # What's now available and worth chasing on the open wire.
     parts.append(_needs_block(ctx))
     parts.append(await _faab_block(ctx, client))
+    parts.append(await _grok_pickup_analysis(ctx, client))
     parts.append(
-        "\n<i>These are still-available free agents you can grab now "
-        "(FAAB or first-come, depending on your league's waiver settings).</i>"
+        "\n<i>Still-available free agents you can grab now (FAAB or first-come, "
+        "per your league's waiver settings).</i>"
     )
     return "".join(parts)
 
