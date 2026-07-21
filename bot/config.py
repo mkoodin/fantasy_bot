@@ -57,6 +57,10 @@ LEAGUE_ID = os.getenv("LEAGUE_ID")
 # LEAGUE_NAME auto-detects the league by name each season, so it follows you
 # into next year's re-draft with zero edits. Defaulted for the primary league.
 LEAGUE_NAME = os.getenv("LEAGUE_NAME", "Show me your TDs")
+# Track whether league identity came from a real env var vs. the baked-in
+# default, so /diag can confirm a service's variables actually reached it.
+SLEEPER_USER_ID_FROM_ENV = os.getenv("SLEEPER_USER_ID") is not None
+LEAGUE_NAME_FROM_ENV = os.getenv("LEAGUE_NAME") is not None
 # Season is derived from the resolved league; this is only a display fallback.
 SEASON = os.getenv("SEASON", str(datetime.now().year))
 

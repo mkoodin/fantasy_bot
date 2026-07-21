@@ -407,9 +407,11 @@ async def cmd_diag(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"LEAGUE_ID: {yn(config.LEAGUE_ID)}"
         + (f" <code>{digest.esc(config.LEAGUE_ID)}</code>" if config.LEAGUE_ID else ""),
         f"LEAGUE_NAME: {yn(config.LEAGUE_NAME)}"
-        + (f" <code>{digest.esc(config.LEAGUE_NAME)}</code>" if config.LEAGUE_NAME else ""),
+        + (f" <code>{digest.esc(config.LEAGUE_NAME)}</code>" if config.LEAGUE_NAME else "")
+        + (" <i>(from env)</i>" if config.LEAGUE_NAME_FROM_ENV else " <i>(code default)</i>"),
         f"SLEEPER_USER_ID: {yn(config.SLEEPER_USER_ID)}"
-        + (f" <code>{digest.esc(config.SLEEPER_USER_ID)}</code>" if config.SLEEPER_USER_ID else ""),
+        + (f" <code>{digest.esc(config.SLEEPER_USER_ID)}</code>" if config.SLEEPER_USER_ID else "")
+        + (" <i>(from env)</i>" if config.SLEEPER_USER_ID_FROM_ENV else " <i>(code default)</i>"),
         f"SLEEPER_USERNAME: {yn(config.SLEEPER_USERNAME)}",
         f"SEASON: <code>{digest.esc(config.SEASON)}</code>",
         f"XAI_API_KEY: {yn(config.XAI_API_KEY)}",
