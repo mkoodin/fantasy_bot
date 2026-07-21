@@ -47,16 +47,16 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 # --- Sleeper ----------------------------------------------------------------
 # Provide either your username (bot resolves the id) and/or an explicit id.
 SLEEPER_USERNAME = os.getenv("SLEEPER_USERNAME")
-# Identifies the manager's team. Set per service — one repo can run many
-# leagues, each as its own Railway service with its own Telegram bot + vars.
-SLEEPER_USER_ID = os.getenv("SLEEPER_USER_ID")
-# Point the bot at a league one of two ways:
-#   LEAGUE_ID   — pin one specific league (most explicit), or
-#   LEAGUE_NAME — auto-detect by name each season from SLEEPER_USER_ID's leagues
-#                 (follows you into next year's re-draft with zero edits).
-# Set at least one. LEAGUE_ID wins if both are set.
+# Primary-league config lives here as fallback DEFAULTS so the bot works even
+# when the host is flaky about delivering newly-added variables (code deploys
+# reliably; variable changes sometimes don't land on the running service).
+# Env vars still OVERRIDE these, so a second service can point at another league.
+SLEEPER_USER_ID = os.getenv("SLEEPER_USER_ID", "1267645505593147392")  # Koodini
+# LEAGUE_ID pins one specific league; leave unset to auto-detect by LEAGUE_NAME.
 LEAGUE_ID = os.getenv("LEAGUE_ID")
-LEAGUE_NAME = os.getenv("LEAGUE_NAME")
+# LEAGUE_NAME auto-detects the league by name each season, so it follows you
+# into next year's re-draft with zero edits. Defaulted for the primary league.
+LEAGUE_NAME = os.getenv("LEAGUE_NAME", "Show me your TDs")
 # Season is derived from the resolved league; this is only a display fallback.
 SEASON = os.getenv("SEASON", str(datetime.now().year))
 
