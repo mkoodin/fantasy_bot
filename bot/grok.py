@@ -63,7 +63,9 @@ def _instructions() -> str:
         + " Prioritize credible sources over hype. Cover, only if relevant: "
         "injury/practice status, snap-count or role change, matchup, and whether "
         "they're worth a waiver/FAAB add THIS week. Be direct. If the buzz is thin "
-        "or just noise, say so. Keep it under 140 words. End with one line: "
+        "or just noise, say so. Keep it under 140 words. Write plain text prose "
+        "only — NO markdown: no **bold** or asterisks, no headers, and no inline "
+        "links or bracketed citation markers like [[1]]. End with one line: "
         "'Verdict: <ADD / STASH / HOLD / PASS> — <short why>'."
     )
 
