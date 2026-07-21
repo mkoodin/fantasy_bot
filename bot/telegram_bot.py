@@ -260,8 +260,16 @@ async def _answer(
     try:
         ctx = await _ctx()
         full_ctx = await analysis.full_league_context(ctx, client)
-    except Exception:
-        full_ctx = ""  # still answer, just without personalization
+    except Exception as exc:
+        # Don't answer blindly with no league data — say what's wrong instead.
+        await _send(
+            update,
+            "⚠️ I couldn't load your league from Sleeper, so I won't guess "
+            f"without your data. Error: <code>{digest.esc(exc)}</code>\n\n"
+            "Check that <code>LEAGUE_ID</code> and <code>SLEEPER_USER_ID</code> "
+            "are set correctly in Railway → Variables.",
+        )
+        return
 
     history = context.chat_data.setdefault("qa_history", [])
     result = await grok.answer_question(
