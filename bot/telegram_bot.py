@@ -234,6 +234,29 @@ def _wants_deep(text: str) -> bool:
     return bool(_DEEP_PATTERNS.search(text))
 
 
+# Draft/ADP questions — ungrounded without a live ADP/rankings search.
+_DRAFT_PATTERNS = re.compile(
+    r"\b(draft|adp|mock|what round|which round|round \d|draft board|"
+    r"draft position|draft rank|draft strateg|snake draft|auction value|"
+    r"sleepers? to draft|early pick)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_draft(text: str) -> bool:
+    return bool(_DRAFT_PATTERNS.search(text))
+
+
+_DRAFT_DIRECTIVE = (
+    "\n\n[DRAFT/ADP QUESTION — ground this in DATA, not memory. FIRST live-search "
+    "the CURRENT consensus ADP and industry rankings for the upcoming season "
+    "(e.g. FantasyPros, Sleeper ADP, respected analysts), then tier and rank "
+    "players strictly from that current consensus. Anchor every round/tier claim "
+    "to it, and call out players whose value has recently risen or fallen. It's "
+    "redraft — value THIS season only.]"
+)
+
+
 async def _answer(
     update: Update, context: ContextTypes.DEFAULT_TYPE, question: str, deep: bool
 ) -> None:
@@ -252,6 +275,13 @@ async def _answer(
             "Meanwhile /help lists the commands that work without it.",
         )
         return
+    # Draft/ADP questions are ungrounded from memory — force the flagship and
+    # make it pull current consensus ADP/rankings first. Keep the user's
+    # original wording in history; only the Grok call sees the directive.
+    grok_question = question
+    if _is_draft(question):
+        deep = True
+        grok_question = question + _DRAFT_DIRECTIVE
     await _typing(update)
     note = "🔎 On it — searching X + news…"
     if deep:
@@ -274,7 +304,7 @@ async def _answer(
 
     history = context.chat_data.setdefault("qa_history", [])
     result = await grok.answer_question(
-        question, full_ctx, deep=deep, history=list(history)
+        grok_question, full_ctx, deep=deep, history=list(history)
     )
     if not result:
         await _send(update, "No response from Grok.")
