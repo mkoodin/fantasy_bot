@@ -255,6 +255,90 @@ def team_context_summary(ctx: LeagueContext) -> str:
     return "\n".join(lines)
 
 
+def league_rosters_context(ctx: LeagueContext) -> str:
+    """Every team's full roster (who owns whom). Anyone not listed here is a
+    free agent — this gives Grok the authoritative live league picture for
+    availability and trade questions."""
+    lines = [
+        "Full league rosters — who owns whom. Any fantasy-relevant player NOT "
+        "listed below is a FREE AGENT available to add:"
+    ]
+    for r in sorted(ctx.rosters, key=lambda x: x.get("roster_id", 0)):
+        owner = ctx.team_name(r.get("owner_id", ""))
+        mine = " (YOUR TEAM)" if r.get("owner_id") == ctx.my_user_id else ""
+        names = []
+        for pid in r.get("players") or []:
+            p = ctx.players.get(pid)
+            if not p:
+                continue
+            pos = p.get("position") or "?"
+            team = p.get("team") or "FA"
+            tag = f"{player_name(p)} ({pos}-{team})"
+            if is_out(p):
+                tag += f"[{p.get('injury_status')}]"
+            names.append(tag)
+        lines.append(f"{owner}{mine}: {', '.join(names) if names else '(empty)'}")
+    return "\n".join(lines)
+
+
+def league_faab_context(ctx: LeagueContext) -> str:
+    """Each team's remaining FAAB, so bid advice accounts for who can outbid you
+    (waivers go to the highest bidder)."""
+    rows = []
+    for r in ctx.rosters:
+        used = int((r.get("settings") or {}).get("waiver_budget_used") or 0)
+        rem = max(0, ctx.faab_total - used)
+        mine = r.get("owner_id") == ctx.my_user_id
+        rows.append((ctx.team_name(r.get("owner_id", "")), rem, mine))
+    rows.sort(key=lambda x: x[1], reverse=True)
+    lines = [
+        f"FAAB remaining by team (of ${ctx.faab_total}; highest bid wins a "
+        "waiver — use this to size a winning bid and spot who can outbid you):"
+    ]
+    for name, rem, mine in rows:
+        lines.append(f"  {name}{' (YOU)' if mine else ''}: ${rem}")
+    return "\n".join(lines)
+
+
+async def available_fa_context(
+    ctx: LeagueContext, client: SleeperClient, per_pos: int = 8
+) -> str:
+    """List notable players actually AVAILABLE in this league (trending adds not
+    on any roster), grouped by position — so Grok recommends real waiver options
+    instead of generic names that may already be rostered."""
+    trending = await client.get_trending("add", lookback_hours=72, limit=100)
+    by_pos: dict[str, list[str]] = {}
+    for entry in trending:
+        pid = entry.get("player_id")
+        if not pid or pid in ctx.rostered_ids:
+            continue
+        p = ctx.players.get(pid)
+        if not p:
+            continue
+        pos = p.get("position")
+        if pos not in FANTASY_POSITIONS:
+            continue
+        bucket = by_pos.setdefault(pos, [])
+        if len(bucket) < per_pos:
+            team = p.get("team")
+            bucket.append(player_name(p) + (f" ({team})" if team else ""))
+
+    if not by_pos:
+        return ""
+    lines = [
+        "Notable AVAILABLE free agents in your league right now "
+        "(not on any roster, by recent add volume):"
+    ]
+    for pos in ("QB", "RB", "WR", "TE", "K", "DEF"):
+        if by_pos.get(pos):
+            lines.append(f"  {pos}: {', '.join(by_pos[pos])}")
+    lines.append(
+        "When asked about free agents/waivers, recommend from THIS list. If you "
+        "mention someone not on it, flag that they may already be rostered."
+    )
+    return "\n".join(lines)
+
+
 # --- Free agents & FAAB -----------------------------------------------------
 async def hot_free_agents(
     ctx: LeagueContext,

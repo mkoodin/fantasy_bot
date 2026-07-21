@@ -139,22 +139,29 @@ def _answer_instructions(team_context: str) -> str:
         + _format_directive()
         + " "
         + _trusted_directive()
-        + "\n\nThe user's team context (use it to personalize every answer):\n"
-        + (team_context or "(roster context unavailable)")
-        + "\n\nBe concise and decision-oriented. Prioritize credible sources over "
-        "hype. If you make a start/sit or add/drop call, state it clearly with a "
-        "one-line why. Write plain text prose only — no markdown, asterisks, "
-        "headers, or bracketed citations. Keep it under ~180 words unless the "
-        "question truly needs more."
+        + "\n\nLive league context — the user's team, ALL rosters (who owns "
+        "whom), each team's remaining FAAB, and notable available free agents. "
+        "Use it as ground truth:\n"
+        + (team_context or "(league context unavailable)")
+        + "\n\nRules: Recommend free-agent adds only from players NOT on any "
+        "roster above. For waiver/FAAB bids, size the bid to win given rivals' "
+        "remaining FAAB, and call out which opponents are likely to compete "
+        "(they have budget AND a hole at that position). For trades, only "
+        "propose players actually on another team's roster, and target managers "
+        "whose roster needs complement yours. Be concise and decision-oriented; "
+        "if you make a start/sit, add/drop, bid, or trade call, state it clearly "
+        "with a one-line why. Write plain text prose only — no markdown, "
+        "asterisks, headers, or bracketed citations. Keep it under ~180 words "
+        "unless the question truly needs more."
     )
 
 
-def _post(instructions: str, user_content: str, model: str) -> dict:
+def _post(instructions: str, input_messages: list, model: str) -> dict:
     """Blocking POST to the Responses API. Runs in a worker thread."""
     body = {
         "model": model,
         "instructions": instructions,
-        "input": [{"role": "user", "content": user_content}],
+        "input": input_messages,
         "tools": _tools(),
     }
     resp = requests.post(
@@ -172,14 +179,14 @@ def _post(instructions: str, user_content: str, model: str) -> dict:
 
 
 async def _run(
-    instructions: str, user_content: str, deep: bool = False
+    instructions: str, input_messages: list, deep: bool = False
 ) -> Optional[dict]:
     """Shared entry: returns {'text', 'citations'} or None if Grok is off."""
     if not config.ENABLE_GROK:
         return None
     model = config.GROK_MODEL_DEEP if deep else config.GROK_MODEL
     try:
-        data = await asyncio.to_thread(_post, instructions, user_content, model)
+        data = await asyncio.to_thread(_post, instructions, input_messages, model)
     except requests.exceptions.Timeout:
         return {
             "text": "⚠️ That took too long to research. Try a more specific "
@@ -211,14 +218,19 @@ async def analyze_player(
         f"What's the latest fantasy-relevant buzz on {player_name} (NFL)?"
         f"{ctx_line} Focus on the last few days."
     )
-    return await _run(_instructions(), user_msg, deep=deep)
+    return await _run(_instructions(), [{"role": "user", "content": user_msg}], deep=deep)
 
 
 async def answer_question(
-    question: str, team_context: str = "", deep: bool = False
+    question: str,
+    team_context: str = "",
+    deep: bool = False,
+    history: Optional[list] = None,
 ) -> Optional[dict]:
-    """Answer a free-form question about the user's team. {'text', 'citations'}."""
-    return await _run(_answer_instructions(team_context), question, deep=deep)
+    """Answer a free-form question about the user's team, with optional prior
+    conversation turns so follow-ups keep context. {'text', 'citations'}."""
+    messages = list(history or []) + [{"role": "user", "content": question}]
+    return await _run(_answer_instructions(team_context), messages, deep=deep)
 
 
 async def buzz_line(player_name: str, extra_context: str = "") -> str:

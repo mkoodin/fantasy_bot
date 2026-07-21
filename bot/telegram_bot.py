@@ -41,6 +41,7 @@ HELP_TEXT = (
     "<b>/player &lt;name&gt;</b> — live X + news buzz on any player (Grok)\n"
     "<b>/deep &lt;question&gt;</b> — force the flagship model for a big call\n"
     "<b>/gameday</b> — injury sweep of your starters\n"
+    "<b>/reset</b> — clear conversation memory / start a fresh topic\n"
     "<b>/help</b> — this message\n\n"
     "💬 <b>Or just text me any question</b> — e.g. \"who should I start at "
     "FLEX?\" or \"best waiver TE for my team?\" — and I'll answer using your "
@@ -241,8 +242,14 @@ def _wants_deep(text: str) -> bool:
     return bool(_DEEP_PATTERNS.search(text))
 
 
-async def _answer(update: Update, question: str, deep: bool) -> None:
-    """Shared free-form answer flow for on_message and /deep."""
+async def _answer(
+    update: Update, context: ContextTypes.DEFAULT_TYPE, question: str, deep: bool
+) -> None:
+    """Shared free-form answer flow for on_message and /deep.
+
+    Injects the user's roster + real available free agents, and carries a short
+    rolling conversation history so follow-ups ('in my league?') keep context.
+    """
     if not question:
         await _send(update, "Ask me anything, e.g. <code>who should I start at FLEX?</code>")
         return
@@ -258,20 +265,38 @@ async def _answer(update: Update, question: str, deep: bool) -> None:
     if deep:
         note += " (deep analysis with grok-4.5)"
     await update.effective_chat.send_message(note)
+
     try:
         ctx = await _ctx()
-        team_ctx = analysis.team_context_summary(ctx)
+        full_ctx = analysis.team_context_summary(ctx)
+        full_ctx += "\n\n" + analysis.league_rosters_context(ctx)
+        full_ctx += "\n\n" + analysis.league_faab_context(ctx)
+        fa_ctx = await analysis.available_fa_context(ctx, client)
+        if fa_ctx:
+            full_ctx += "\n\n" + fa_ctx
     except Exception:
-        team_ctx = ""  # still answer, just without personalization
-    result = await grok.answer_question(question, team_ctx, deep=deep)
+        full_ctx = ""  # still answer, just without personalization
+
+    history = context.chat_data.setdefault("qa_history", [])
+    result = await grok.answer_question(
+        question, full_ctx, deep=deep, history=list(history)
+    )
     if not result:
         await _send(update, "No response from Grok.")
         return
-    text = digest.esc(result["text"])
+
+    answer = result["text"]
+    # Remember the turn (skip error replies) so follow-ups keep context.
+    if not answer.startswith("⚠️"):
+        history.append({"role": "user", "content": question})
+        history.append({"role": "assistant", "content": answer})
+        del history[:-6]  # keep ~3 turns
+
+    text = digest.esc(answer)
     cites = result.get("citations") or []
     if cites:
         text += "\n\n<b>Sources:</b>\n" + "\n".join(
-            f"• {digest.esc(c)}" for c in cites[:5]
+            f"• {digest.esc(c)}" for c in cites[:4]
         )
     await _send(update, text)
 
@@ -280,14 +305,21 @@ async def _answer(update: Update, question: str, deep: bool) -> None:
 async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Free-form Q&A. Auto-routes high-stakes questions to the flagship model."""
     question = (update.message.text or "").strip() if update.message else ""
-    await _answer(update, question, deep=_wants_deep(question))
+    await _answer(update, context, question, deep=_wants_deep(question))
 
 
 @authorized_only
 async def cmd_deep(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Force the flagship model for a big decision: /deep <question>."""
     question = " ".join(context.args).strip() if context.args else ""
-    await _answer(update, question, deep=True)
+    await _answer(update, context, question, deep=True)
+
+
+@authorized_only
+async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Clear the conversation memory to start a fresh topic."""
+    context.chat_data.pop("qa_history", None)
+    await _send(update, "🧹 Conversation memory cleared — ask me something fresh.")
 
 
 @authorized_only
@@ -370,6 +402,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("trending", cmd_trending))
     app.add_handler(CommandHandler("player", cmd_player))
     app.add_handler(CommandHandler("deep", cmd_deep))
+    app.add_handler(CommandHandler("reset", cmd_reset))
     app.add_handler(CommandHandler("gameday", cmd_gameday))
     # Any plain text that isn't a command → free-form Q&A. Registered last so
     # it never shadows the command handlers above.
