@@ -351,6 +351,53 @@ def league_rosters_context(ctx: LeagueContext) -> str:
     return "\n".join(lines)
 
 
+async def opponent_context(ctx: LeagueContext, client: SleeperClient) -> str:
+    """This week's head-to-head opponent and their starting lineup, so start/sit
+    can weigh floor vs. ceiling: protect a lead with safe plays when favored,
+    chase upside with boom/bust when you're the underdog."""
+    my_rid = ctx.my_roster.get("roster_id")
+    if my_rid is None:
+        return ""
+    try:
+        matchups = await client.get_matchups(ctx.league.get("league_id"), ctx.week)
+    except Exception:
+        return ""
+    if not matchups:
+        return ""
+    mine = next((m for m in matchups if m.get("roster_id") == my_rid), None)
+    if not mine or mine.get("matchup_id") is None:
+        return ""
+    mid = mine.get("matchup_id")
+    opp = next(
+        (m for m in matchups
+         if m.get("matchup_id") == mid and m.get("roster_id") != my_rid),
+        None,
+    )
+    if not opp:
+        return ""
+    opp_roster = next(
+        (r for r in ctx.rosters if r.get("roster_id") == opp.get("roster_id")), {}
+    )
+    opp_name = ctx.team_name(opp_roster.get("owner_id", ""))
+    names = []
+    for pid in opp.get("starters") or opp.get("players") or []:
+        if not pid or pid == "0":
+            continue
+        p = ctx.players.get(pid)
+        if p:
+            names.append(f"{player_name(p)} ({p.get('position', '?')}-{p.get('team', 'FA')})")
+    if not names:
+        return ""
+    return (
+        f"This week's H2H opponent — {opp_name}. Their starters: "
+        + ", ".join(names)
+        + ". MATCHUP STRATEGY: compare our lineups; if I project clearly ahead, "
+        "lean to safe FLOOR plays to lock the win; if I'm the underdog, favor "
+        "high-CEILING boom/bust options to raise my win probability. Flag any "
+        "floor-vs-ceiling swaps this matchup calls for."
+    )
+
+
 def scoring_context(ctx: LeagueContext) -> str:
     """The league's exact scoring rules so Grok values players for THIS league
     (e.g. 4-pt vs 6-pt pass TDs, PPR, TE premium, kicker/DEF quirks)."""

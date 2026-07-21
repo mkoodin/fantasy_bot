@@ -219,6 +219,9 @@ async def build_start_sit(
         return await build_gameday_alert(ctx, client)
 
     full_ctx = await analysis.full_league_context(ctx, client)
+    opp = await analysis.opponent_context(ctx, client)
+    if opp:
+        full_ctx += "\n\n" + opp
     if final:
         extra = (
             " This is a final pre-kickoff check: prioritize confirmed inactives, "
@@ -230,10 +233,17 @@ async def build_start_sit(
             " Include close start/sit calls, favorable/tough matchups, and any "
             "injuries or workload notes to monitor into the weekend."
         )
+    matchup = (
+        " Factor in this week's opponent (in the context): if I'm favored, lean "
+        "to safe floor plays; if I'm the underdog, favor higher-ceiling boom/bust "
+        "options, and flag any floor-vs-ceiling swaps the matchup calls for."
+        if opp
+        else ""
+    )
     question = (
         f"Set my optimal starting lineup for Week {ctx.week}. Go slot by slot: "
         "name who to start with a one-line why, then list the tough bench/close "
-        "calls I should double-check." + extra
+        "calls I should double-check." + matchup + extra
     )
     result = await grok.answer_question(question, full_ctx, deep=True)
     if not result:
