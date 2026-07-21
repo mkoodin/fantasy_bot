@@ -16,6 +16,8 @@ from telegram.ext import (
     Application,
     CommandHandler,
     ContextTypes,
+    MessageHandler,
+    filters,
 )
 
 from . import analysis, config, digest, grok
@@ -37,7 +39,10 @@ HELP_TEXT = (
     "<b>/trending</b> — most-added players across Sleeper right now\n"
     "<b>/player &lt;name&gt;</b> — live X + news buzz on any player (Grok)\n"
     "<b>/gameday</b> — injury sweep of your starters\n"
-    "<b>/help</b> — this message"
+    "<b>/help</b> — this message\n\n"
+    "💬 <b>Or just text me any question</b> — e.g. \"who should I start at "
+    "FLEX?\" or \"best waiver TE for my team?\" — and I'll answer using your "
+    "roster + live search."
 )
 
 
@@ -222,6 +227,39 @@ async def cmd_player(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 
 @authorized_only
+async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Free-form Q&A: any plain (non-command) text is answered by Grok with the
+    user's roster/needs/FAAB loaded, so replies are personalized to their team."""
+    question = (update.message.text or "").strip() if update.message else ""
+    if not question:
+        return
+    if not config.ENABLE_GROK:
+        await _send(
+            update,
+            "Ask-anything needs Grok — set <code>XAI_API_KEY</code> to enable it. "
+            "Meanwhile /help lists the commands that work without it.",
+        )
+        return
+    await _typing(update)
+    try:
+        ctx = await _ctx()
+        team_ctx = analysis.team_context_summary(ctx)
+    except Exception:
+        team_ctx = ""  # still answer, just without personalization
+    result = await grok.answer_question(question, team_ctx)
+    if not result:
+        await _send(update, "No response from Grok.")
+        return
+    text = digest.esc(result["text"])
+    cites = result.get("citations") or []
+    if cites:
+        text += "\n\n<b>Sources:</b>\n" + "\n".join(
+            f"• {digest.esc(c)}" for c in cites[:5]
+        )
+    await _send(update, text)
+
+
+@authorized_only
 async def cmd_gameday(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await _typing(update)
     try:
@@ -301,6 +339,9 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("trending", cmd_trending))
     app.add_handler(CommandHandler("player", cmd_player))
     app.add_handler(CommandHandler("gameday", cmd_gameday))
+    # Any plain text that isn't a command → free-form Q&A. Registered last so
+    # it never shadows the command handlers above.
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
 
     _register_jobs(app)
     return app

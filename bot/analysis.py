@@ -218,6 +218,43 @@ def need_positions(ctx: LeagueContext, threshold: int = 1) -> set[str]:
     return {n["position"] for n in positional_needs(ctx) if n["severity"] >= threshold}
 
 
+def team_context_summary(ctx: LeagueContext) -> str:
+    """Compact, model-friendly summary of the user's team for personalized Q&A."""
+    scoring = ctx.league.get("scoring_settings") or {}
+    ppr = scoring.get("rec")
+    fmt = "PPR" if ppr == 1 else ("Half-PPR" if ppr == 0.5 else "Standard")
+    starters = [
+        s for s in ctx.league.get("roster_positions", []) if s not in BENCH_SLOTS
+    ]
+
+    lines = [
+        f"League: {ctx.league.get('name', 'League')} | {len(ctx.rosters)}-team | "
+        f"{fmt} | Week {ctx.week} {ctx.season}",
+        f"Starting slots: {', '.join(starters)}",
+        f"FAAB remaining: ${ctx.faab_remaining} of ${ctx.faab_total}",
+        "Your roster:",
+    ]
+    grouped = my_players_by_position(ctx)
+    for pos in ("QB", "RB", "WR", "TE", "K", "DEF"):
+        players = grouped.get(pos, [])
+        if not players:
+            continue
+        names = []
+        for p in players:
+            nm = player_name(p)
+            if p.get("injury_status"):
+                nm += f" ({p.get('injury_status')})"
+            names.append(nm)
+        lines.append(f"  {pos}: {', '.join(names)}")
+
+    needs = positional_needs(ctx)
+    if needs:
+        lines.append(
+            "Needs: " + "; ".join(f"{n['position']} ({n['reason']})" for n in needs)
+        )
+    return "\n".join(lines)
+
+
 # --- Free agents & FAAB -----------------------------------------------------
 async def hot_free_agents(
     ctx: LeagueContext,

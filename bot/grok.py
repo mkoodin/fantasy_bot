@@ -13,12 +13,31 @@ Docs: https://docs.x.ai/docs/guides/tools/overview
 """
 
 import asyncio
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import requests
 
 from . import config
+
+# Matches markdown links: [text](url) and citation forms like [[1]](url).
+_MD_LINK = re.compile(r"\[+([^\]]*)\]+\((https?://[^)]+)\)")
+
+
+def _clean(text: str) -> str:
+    """Strip markdown Grok sometimes emits despite instructions, so Telegram
+    HTML renders cleanly. Citations are surfaced separately, so drop inline
+    numeric markers; keep meaningful link labels as plain text."""
+    def repl(m: "re.Match") -> str:
+        label = m.group(1).strip()
+        return "" if (not label or label.isdigit()) else label
+
+    text = _MD_LINK.sub(repl, text)
+    text = re.sub(r"\[+\d+\]+", "", text)   # leftover [[1]] / [1]
+    text = text.replace("**", "").replace("__", "")
+    text = re.sub(r"[ \t]{2,}", " ", text)
+    return text.strip()
 
 
 def _format_directive() -> str:
@@ -111,21 +130,31 @@ def _extract_citations(data: dict) -> list[str]:
     return urls
 
 
-def _request(player_name: str, extra_context: str) -> dict:
+def _answer_instructions(team_context: str) -> str:
+    """System prompt for free-form questions about the user's own team."""
+    return (
+        "You are a personalized NFL fantasy football assistant for the user's "
+        "specific team. Answer their question directly and practically, using the "
+        "X posts and web results you searched for current info. "
+        + _format_directive()
+        + " "
+        + _trusted_directive()
+        + "\n\nThe user's team context (use it to personalize every answer):\n"
+        + (team_context or "(roster context unavailable)")
+        + "\n\nBe concise and decision-oriented. Prioritize credible sources over "
+        "hype. If you make a start/sit or add/drop call, state it clearly with a "
+        "one-line why. Write plain text prose only — no markdown, asterisks, "
+        "headers, or bracketed citations. Keep it under ~180 words unless the "
+        "question truly needs more."
+    )
+
+
+def _post(instructions: str, user_content: str) -> dict:
     """Blocking POST to the Responses API. Runs in a worker thread."""
-    ctx_line = f" Context: {extra_context}." if extra_context else ""
     body = {
         "model": config.GROK_MODEL,
-        "instructions": _instructions(),
-        "input": [
-            {
-                "role": "user",
-                "content": (
-                    f"What's the latest fantasy-relevant buzz on {player_name} "
-                    f"(NFL)?{ctx_line} Focus on the last few days."
-                ),
-            }
-        ],
+        "instructions": instructions,
+        "input": [{"role": "user", "content": user_content}],
         "tools": _tools(),
     }
     resp = requests.post(
@@ -138,22 +167,35 @@ def _request(player_name: str, extra_context: str) -> dict:
         timeout=120,
     )
     if resp.status_code != 200:
-        detail = resp.text[:300]
-        raise RuntimeError(f"xAI {resp.status_code}: {detail}")
+        raise RuntimeError(f"xAI {resp.status_code}: {resp.text[:300]}")
     return resp.json()
 
 
-async def analyze_player(player_name: str, extra_context: str = "") -> Optional[dict]:
-    """Return {'text': summary, 'citations': [...]} or None if Grok is off."""
+async def _run(instructions: str, user_content: str) -> Optional[dict]:
+    """Shared entry: returns {'text', 'citations'} or None if Grok is off."""
     if not config.ENABLE_GROK:
         return None
     try:
-        data = await asyncio.to_thread(_request, player_name, extra_context)
+        data = await asyncio.to_thread(_post, instructions, user_content)
     except Exception as exc:  # network / auth / quota — surface, don't crash
         return {"text": f"⚠️ Grok lookup failed: {exc}", "citations": []}
-
-    text = _extract_text(data) or "No usable response from Grok."
+    text = _clean(_extract_text(data)) or "No usable response from Grok."
     return {"text": text, "citations": _extract_citations(data)}
+
+
+async def analyze_player(player_name: str, extra_context: str = "") -> Optional[dict]:
+    """Live buzz on a single player. {'text', 'citations'} or None if off."""
+    ctx_line = f" Context: {extra_context}." if extra_context else ""
+    user_msg = (
+        f"What's the latest fantasy-relevant buzz on {player_name} (NFL)?"
+        f"{ctx_line} Focus on the last few days."
+    )
+    return await _run(_instructions(), user_msg)
+
+
+async def answer_question(question: str, team_context: str = "") -> Optional[dict]:
+    """Answer a free-form question about the user's team. {'text', 'citations'}."""
+    return await _run(_answer_instructions(team_context), question)
 
 
 async def buzz_line(player_name: str, extra_context: str = "") -> str:
