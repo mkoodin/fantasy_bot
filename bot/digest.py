@@ -41,6 +41,21 @@ def split_for_telegram(text: str) -> list[str]:
     return chunks
 
 
+def _offseason_note(ctx: analysis.LeagueContext) -> str:
+    """Banner clarifying that digests are placeholder data in the offseason."""
+    if not analysis.is_offseason(ctx):
+        return ""
+    try:
+        nxt = int(ctx.season) + 1
+    except (TypeError, ValueError):
+        nxt = ""
+    return (
+        f"\n⚠️ <i>Offseason — this reflects your completed {esc(ctx.season)} "
+        f"league. Live waivers &amp; start/sit resume when the {nxt} season "
+        "starts.</i>\n"
+    )
+
+
 def _header(ctx: analysis.LeagueContext, title: str) -> str:
     team = esc(ctx.team_name(ctx.my_user_id))
     return (
@@ -48,6 +63,7 @@ def _header(ctx: analysis.LeagueContext, title: str) -> str:
         f"<i>{esc(ctx.league.get('name', 'League'))} · Week {ctx.week} · "
         f"{team}</i>\n"
         f"💰 FAAB left: <b>${ctx.faab_remaining}</b> of ${ctx.faab_total}\n"
+        + _offseason_note(ctx)
     )
 
 

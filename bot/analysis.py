@@ -47,6 +47,7 @@ class LeagueContext:
     faab_total: int
     faab_used: int
     rostered_ids: set[str] = field(default_factory=set)
+    season_type: str = ""  # "regular" | "post" | "off" | "pre" from NFL state
 
     @property
     def faab_remaining(self) -> int:
@@ -134,6 +135,7 @@ async def build_context(client: SleeperClient, force: bool = False) -> LeagueCon
     players = await client.get_players()
     state = await client.get_nfl_state()
     week = int(state.get("week") or 1) or 1
+    season_type = state.get("season_type") or ""
 
     # Locate my roster. If we only had a LEAGUE_ID, fall back to the first.
     my_roster = None
@@ -162,10 +164,19 @@ async def build_context(client: SleeperClient, force: bool = False) -> LeagueCon
         faab_total=faab_total,
         faab_used=faab_used,
         rostered_ids=rostered_ids,
+        season_type=season_type,
     )
     _cache["ctx"] = ctx
     _cache["ts"] = now
     return ctx
+
+
+def is_offseason(ctx: LeagueContext) -> bool:
+    """True when there's no live fantasy action — the league's season is
+    complete, or the NFL is between seasons (offseason/preseason)."""
+    if (ctx.league.get("status") or "").lower() == "complete":
+        return True
+    return ctx.season_type in ("off", "pre")
 
 
 # --- Roster / needs analysis ------------------------------------------------
@@ -257,9 +268,15 @@ def team_context_summary(ctx: LeagueContext) -> str:
         s for s in ctx.league.get("roster_positions", []) if s not in BENCH_SLOTS
     ]
 
+    off = (
+        " | OFFSEASON: this season is complete, so there are no live waivers "
+        "yet — frame advice as outlook/planning, not this-week moves"
+        if is_offseason(ctx)
+        else ""
+    )
     lines = [
         f"League: {ctx.league.get('name', 'League')} | {len(ctx.rosters)}-team | "
-        f"{fmt} | Week {ctx.week} {ctx.season}",
+        f"{fmt} | Week {ctx.week} {ctx.season}{off}",
         f"Starting slots: {', '.join(starters)}",
         f"FAAB remaining: ${ctx.faab_remaining} of ${ctx.faab_total}",
         "Your roster:",
