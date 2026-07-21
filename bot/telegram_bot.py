@@ -406,6 +406,8 @@ async def cmd_diag(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"TELEGRAM_CHAT_ID: {yn(config.TELEGRAM_CHAT_ID)}",
         f"LEAGUE_ID: {yn(config.LEAGUE_ID)}"
         + (f" <code>{digest.esc(config.LEAGUE_ID)}</code>" if config.LEAGUE_ID else ""),
+        f"LEAGUE_NAME: {yn(config.LEAGUE_NAME)}"
+        + (f" <code>{digest.esc(config.LEAGUE_NAME)}</code>" if config.LEAGUE_NAME else ""),
         f"SLEEPER_USER_ID: {yn(config.SLEEPER_USER_ID)}"
         + (f" <code>{digest.esc(config.SLEEPER_USER_ID)}</code>" if config.SLEEPER_USER_ID else ""),
         f"SLEEPER_USERNAME: {yn(config.SLEEPER_USERNAME)}",
