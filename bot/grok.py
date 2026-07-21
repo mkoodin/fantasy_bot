@@ -176,6 +176,7 @@ def _post(instructions: str, input_messages: list, model: str) -> dict:
         "instructions": instructions,
         "input": input_messages,
         "tools": _tools(),
+        "temperature": config.GROK_TEMPERATURE,
     }
     resp = requests.post(
         f"{config.XAI_BASE_URL}/responses",

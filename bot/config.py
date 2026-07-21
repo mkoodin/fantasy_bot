@@ -98,6 +98,9 @@ GROK_LOOKBACK_DAYS = int(os.getenv("GROK_LOOKBACK_DAYS", "3"))
 # Per-request timeout (seconds). Agentic search on broad questions can run
 # long, so give it room before giving up.
 GROK_TIMEOUT = int(os.getenv("GROK_TIMEOUT", "210"))
+# Sampling temperature. Lower = more consistent/focused answers run-to-run;
+# higher = more varied. 0.4 keeps picks steady without being robotic.
+GROK_TEMPERATURE = float(os.getenv("GROK_TEMPERATURE", "0.4"))
 # If true, hard-restrict the X search to your trusted handles (max 20). Off by
 # default so breaking beat-reporter news isn't filtered out.
 X_RESTRICT_TO_HANDLES = os.getenv("X_RESTRICT_TO_HANDLES", "").lower() in (
