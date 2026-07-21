@@ -54,7 +54,9 @@ SLEEPER_USER_ID = os.getenv("SLEEPER_USER_ID", "1267645505593147392")  # Koodini
 # If you're in multiple leagues, pin the one you want. Otherwise the bot
 # uses the first league it finds for the season.
 LEAGUE_ID = os.getenv("LEAGUE_ID", "1251988282942685184")  # "Show me your TDs"
-SEASON = os.getenv("SEASON", str(datetime.now().year))
+# "Show me your TDs" is a 2025-season league. When you draft your 2026 league,
+# set LEAGUE_ID to the new one and bump SEASON (or set SEASON=2026 env var).
+SEASON = os.getenv("SEASON", "2025")
 
 # --- League strategy --------------------------------------------------------
 # redraft | dynasty | keeper. Steers Grok toward this-season vs. long-term
