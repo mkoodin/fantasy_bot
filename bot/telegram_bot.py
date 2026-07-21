@@ -259,6 +259,29 @@ _DRAFT_DIRECTIVE = (
 )
 
 
+# Streaming / strength-of-schedule / weekly-matchup questions.
+_MATCHUP_PATTERNS = re.compile(
+    r"\b(stream|streaming|strength of schedule|\bsos\b|schedule|matchup|"
+    r"easy run|favorable run|good run|tough stretch|soft stretch|weeks? \d|"
+    r"next few weeks|rest of (?:the )?season|playoff schedule)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_matchup(text: str) -> bool:
+    return bool(_MATCHUP_PATTERNS.search(text))
+
+
+_MATCHUP_DIRECTIVE = (
+    "\n\n[MATCHUP/SCHEDULE QUESTION — ground it in the real NFL schedule. "
+    "Live-search the relevant weeks' matchups and each team's defensive rank vs. "
+    "the position in question (include my playoff Weeks 15-17 when rest-of-season "
+    "or playoff streaming is implied). Distinguish who's the best play THIS week "
+    "from who has the ideal upcoming/playoff run, and name concrete streamers "
+    "with the specific weeks they're best.]"
+)
+
+
 async def _answer(
     update: Update, context: ContextTypes.DEFAULT_TYPE, question: str, deep: bool
 ) -> None:
@@ -283,7 +306,9 @@ async def _answer(
     grok_question = question
     if _is_draft(question):
         deep = True
-        grok_question = question + _DRAFT_DIRECTIVE
+        grok_question += _DRAFT_DIRECTIVE
+    if _is_matchup(question):
+        grok_question += _MATCHUP_DIRECTIVE
     await _typing(update)
     note = "🔎 On it — analyzing your league + live X/news…"
     if deep:
