@@ -219,7 +219,7 @@ async def build_start_sit(
         return await build_gameday_alert(ctx, client)
 
     full_ctx = await analysis.full_league_context(ctx, client)
-    opp = await analysis.opponent_context(ctx, client)
+    opp = await analysis.opponent_context(ctx, client, final=final)
     if opp:
         full_ctx += "\n\n" + opp
     if final:

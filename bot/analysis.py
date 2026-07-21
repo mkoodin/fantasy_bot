@@ -351,10 +351,16 @@ def league_rosters_context(ctx: LeagueContext) -> str:
     return "\n".join(lines)
 
 
-async def opponent_context(ctx: LeagueContext, client: SleeperClient) -> str:
+async def opponent_context(
+    ctx: LeagueContext, client: SleeperClient, final: bool = False
+) -> str:
     """This week's head-to-head opponent and their starting lineup, so start/sit
     can weigh floor vs. ceiling: protect a lead with safe plays when favored,
-    chase upside with boom/bust when you're the underdog."""
+    chase upside with boom/bust when you're the underdog.
+
+    Robust to an opponent who hasn't set their lineup yet: their full roster is
+    already in the league context, so Grok is told to judge their strength by
+    their BEST likely lineup rather than whatever placeholder starters show."""
     my_rid = ctx.my_roster.get("roster_id")
     if my_rid is None:
         return ""
@@ -379,22 +385,41 @@ async def opponent_context(ctx: LeagueContext, client: SleeperClient) -> str:
         (r for r in ctx.rosters if r.get("roster_id") == opp.get("roster_id")), {}
     )
     opp_name = ctx.team_name(opp_roster.get("owner_id", ""))
+    starter_ids = [pid for pid in (opp.get("starters") or []) if pid and pid != "0"]
     names = []
-    for pid in opp.get("starters") or opp.get("players") or []:
-        if not pid or pid == "0":
-            continue
+    for pid in starter_ids or (opp.get("players") or []):
         p = ctx.players.get(pid)
         if p:
             names.append(f"{player_name(p)} ({p.get('position', '?')}-{p.get('team', 'FA')})")
     if not names:
         return ""
+
+    # A set lineup that still contains an out/injured player is a tell that the
+    # opponent hasn't actually set it this week.
+    looks_unset = any(is_out(ctx.players.get(pid, {})) for pid in starter_ids)
+    if final:
+        caveat = (
+            " These starters are near lineup-lock; if any get ruled out, assume "
+            "they swap to their next-best bench option."
+        )
+    else:
+        caveat = (
+            " Their lineup likely isn't finalized this early in the week — judge "
+            "their strength by their BEST likely lineup from their full roster "
+            "(in the rosters above), not just these currently-set starters."
+        )
+    if looks_unset:
+        caveat += " (Their current lineup looks unset — it still has an out/injured player in it.)"
+
     return (
-        f"This week's H2H opponent — {opp_name}. Their starters: "
+        f"This week's H2H opponent — {opp_name}. Their current starters: "
         + ", ".join(names)
-        + ". MATCHUP STRATEGY: compare our lineups; if I project clearly ahead, "
-        "lean to safe FLOOR plays to lock the win; if I'm the underdog, favor "
-        "high-CEILING boom/bust options to raise my win probability. Flag any "
-        "floor-vs-ceiling swaps this matchup calls for."
+        + "."
+        + caveat
+        + " MATCHUP STRATEGY: compare our best lineups; if I project clearly "
+        "ahead, lean to safe FLOOR plays to lock the win; if I'm the underdog, "
+        "favor high-CEILING boom/bust options to raise my win probability. Flag "
+        "any floor-vs-ceiling swaps this matchup calls for."
     )
 
 
