@@ -47,16 +47,16 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 # --- Sleeper ----------------------------------------------------------------
 # Provide either your username (bot resolves the id) and/or an explicit id.
 SLEEPER_USERNAME = os.getenv("SLEEPER_USERNAME")
-# These are public identifiers (not secrets), so they're baked in as defaults
-# for this league — the bot works even if the host's env vars aren't set.
-# Override via env vars to point at a different team/league.
-SLEEPER_USER_ID = os.getenv("SLEEPER_USER_ID", "1267645505593147392")  # Koodini
-# Leave LEAGUE_ID unset to AUTO-DETECT: the bot finds your league by
-# SLEEPER_USER_ID + LEAGUE_NAME for the current NFL season, falling back to
-# recent past seasons in the offseason — so it follows you into a new league
-# each year with zero edits. Set LEAGUE_ID to pin a specific league instead.
+# Identifies the manager's team. Set per service — one repo can run many
+# leagues, each as its own Railway service with its own Telegram bot + vars.
+SLEEPER_USER_ID = os.getenv("SLEEPER_USER_ID")
+# Point the bot at a league one of two ways:
+#   LEAGUE_ID   — pin one specific league (most explicit), or
+#   LEAGUE_NAME — auto-detect by name each season from SLEEPER_USER_ID's leagues
+#                 (follows you into next year's re-draft with zero edits).
+# Set at least one. LEAGUE_ID wins if both are set.
 LEAGUE_ID = os.getenv("LEAGUE_ID")
-LEAGUE_NAME = os.getenv("LEAGUE_NAME", "Show me your TDs")
+LEAGUE_NAME = os.getenv("LEAGUE_NAME")
 # Season is derived from the resolved league; this is only a display fallback.
 SEASON = os.getenv("SEASON", str(datetime.now().year))
 
@@ -147,7 +147,8 @@ def missing_required() -> list[str]:
         "TELEGRAM_TOKEN": TELEGRAM_TOKEN,
         "TELEGRAM_CHAT_ID": TELEGRAM_CHAT_ID,
     }
-    # Need at least one way to identify the Sleeper account.
-    if not (SLEEPER_USERNAME or SLEEPER_USER_ID or LEAGUE_ID):
-        required["SLEEPER_USERNAME|SLEEPER_USER_ID|LEAGUE_ID"] = None
+    # Need a way to find the league: an explicit LEAGUE_ID, or a Sleeper
+    # identifier (ideally paired with LEAGUE_NAME to pick the right one).
+    if not (LEAGUE_ID or SLEEPER_USER_ID or SLEEPER_USERNAME):
+        required["LEAGUE_ID or SLEEPER_USER_ID (+ LEAGUE_NAME)"] = None
     return [name for name, val in required.items() if not val]
