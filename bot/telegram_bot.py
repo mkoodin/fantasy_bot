@@ -250,10 +250,12 @@ def _is_draft(text: str) -> bool:
 _DRAFT_DIRECTIVE = (
     "\n\n[DRAFT/ADP QUESTION — ground this in DATA, not memory. FIRST live-search "
     "the CURRENT consensus ADP and industry rankings for the upcoming season "
-    "(e.g. FantasyPros, Sleeper ADP, respected analysts), then tier and rank "
-    "players strictly from that current consensus. Anchor every round/tier claim "
-    "to it, and call out players whose value has recently risen or fallen. It's "
-    "redraft — value THIS season only.]"
+    "(e.g. FantasyPros, Sleeper ADP, respected analysts). Anchor every round/tier "
+    "claim to that consensus. Then add real edge: flag MISPRICED ADP — undervalued "
+    "sleepers/values whose role, situation, or buzz beats their ADP (target these "
+    "later than their talent), and overpriced reaches whose ADP exceeds their "
+    "outlook (let others overpay) — plus notable ADP risers/fallers, with a "
+    "one-line why for each. It's redraft — value THIS season only.]"
 )
 
 
