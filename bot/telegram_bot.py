@@ -255,7 +255,7 @@ async def _answer(
     await _typing(update)
     note = "🔎 On it — searching X + news…"
     if deep:
-        note += " (deep analysis with grok-4.5)"
+        note += " (deep analysis with grok-4.5 — this can take a minute or two)"
     await update.effective_chat.send_message(note)
 
     try:
@@ -506,8 +506,27 @@ def _register_jobs(app: Application) -> None:
     )
 
 
+async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Global safety net: log any unhandled error and tell the user, so a
+    failure (or a mid-request restart) never leaves them hanging silently."""
+    logger.exception("Unhandled handler error", exc_info=context.error)
+    chat_id = config.TELEGRAM_CHAT_ID
+    if isinstance(update, Update) and update.effective_chat:
+        chat_id = update.effective_chat.id
+    if not chat_id:
+        return
+    try:
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="⚠️ Something interrupted that — please try again in a moment.",
+        )
+    except Exception:
+        pass
+
+
 def build_application() -> Application:
     app = Application.builder().token(config.TELEGRAM_TOKEN).build()
+    app.add_error_handler(on_error)
 
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_help))
