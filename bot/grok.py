@@ -149,10 +149,10 @@ def _answer_instructions(team_context: str) -> str:
     )
 
 
-def _post(instructions: str, user_content: str) -> dict:
+def _post(instructions: str, user_content: str, model: str) -> dict:
     """Blocking POST to the Responses API. Runs in a worker thread."""
     body = {
-        "model": config.GROK_MODEL,
+        "model": model,
         "instructions": instructions,
         "input": [{"role": "user", "content": user_content}],
         "tools": _tools(),
@@ -171,12 +171,15 @@ def _post(instructions: str, user_content: str) -> dict:
     return resp.json()
 
 
-async def _run(instructions: str, user_content: str) -> Optional[dict]:
+async def _run(
+    instructions: str, user_content: str, deep: bool = False
+) -> Optional[dict]:
     """Shared entry: returns {'text', 'citations'} or None if Grok is off."""
     if not config.ENABLE_GROK:
         return None
+    model = config.GROK_MODEL_DEEP if deep else config.GROK_MODEL
     try:
-        data = await asyncio.to_thread(_post, instructions, user_content)
+        data = await asyncio.to_thread(_post, instructions, user_content, model)
     except requests.exceptions.Timeout:
         return {
             "text": "⚠️ That took too long to research. Try a more specific "
@@ -199,19 +202,23 @@ async def _run(instructions: str, user_content: str) -> Optional[dict]:
     return {"text": text, "citations": _extract_citations(data)}
 
 
-async def analyze_player(player_name: str, extra_context: str = "") -> Optional[dict]:
+async def analyze_player(
+    player_name: str, extra_context: str = "", deep: bool = False
+) -> Optional[dict]:
     """Live buzz on a single player. {'text', 'citations'} or None if off."""
     ctx_line = f" Context: {extra_context}." if extra_context else ""
     user_msg = (
         f"What's the latest fantasy-relevant buzz on {player_name} (NFL)?"
         f"{ctx_line} Focus on the last few days."
     )
-    return await _run(_instructions(), user_msg)
+    return await _run(_instructions(), user_msg, deep=deep)
 
 
-async def answer_question(question: str, team_context: str = "") -> Optional[dict]:
+async def answer_question(
+    question: str, team_context: str = "", deep: bool = False
+) -> Optional[dict]:
     """Answer a free-form question about the user's team. {'text', 'citations'}."""
-    return await _run(_answer_instructions(team_context), question)
+    return await _run(_answer_instructions(team_context), question, deep=deep)
 
 
 async def buzz_line(player_name: str, extra_context: str = "") -> str:

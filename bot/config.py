@@ -82,8 +82,10 @@ X_TRUSTED_HANDLES = [
 # --- xAI / Grok Agent Tools (x_search + web_search) -------------------------
 XAI_API_KEY = os.getenv("XAI_API_KEY")
 XAI_BASE_URL = os.getenv("XAI_BASE_URL", "https://api.x.ai/v1")
-# grok-4.5 is the current tool-capable model; grok-3 / Live Search are retired.
-GROK_MODEL = os.getenv("GROK_MODEL", "grok-4.5")
+# Two tiers: grok-4.3 for everyday buzz/questions (cheaper), grok-4.5 for
+# high-stakes calls (trades, lineup optimization). grok-3 / Live Search retired.
+GROK_MODEL = os.getenv("GROK_MODEL", "grok-4.3")
+GROK_MODEL_DEEP = os.getenv("GROK_MODEL_DEEP", "grok-4.5")
 # How many days back the X/news search looks.
 GROK_LOOKBACK_DAYS = int(os.getenv("GROK_LOOKBACK_DAYS", "3"))
 # Per-request timeout (seconds). Agentic search on broad questions can run

@@ -7,6 +7,7 @@ and the cached LeagueContext from analysis.build_context().
 """
 
 import logging
+import re
 from datetime import datetime
 from functools import wraps
 
@@ -38,11 +39,13 @@ HELP_TEXT = (
     "<b>/needs</b> — where your roster is thin\n"
     "<b>/trending</b> — most-added players across Sleeper right now\n"
     "<b>/player &lt;name&gt;</b> — live X + news buzz on any player (Grok)\n"
+    "<b>/deep &lt;question&gt;</b> — force the flagship model for a big call\n"
     "<b>/gameday</b> — injury sweep of your starters\n"
     "<b>/help</b> — this message\n\n"
     "💬 <b>Or just text me any question</b> — e.g. \"who should I start at "
     "FLEX?\" or \"best waiver TE for my team?\" — and I'll answer using your "
-    "roster + live search."
+    "roster + live search. Trade/lineup-optimization questions auto-upgrade to "
+    "the flagship model."
 )
 
 
@@ -226,12 +229,22 @@ async def cmd_player(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     await _send(update, text)
 
 
-@authorized_only
-async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Free-form Q&A: any plain (non-command) text is answered by Grok with the
-    user's roster/needs/FAAB loaded, so replies are personalized to their team."""
-    question = (update.message.text or "").strip() if update.message else ""
+# High-stakes questions worth the flagship model (multi-factor decisions).
+_DEEP_PATTERNS = re.compile(
+    r"\b(trade|trading|optimal lineup|best lineup|set (?:my )?lineup|optimi[sz]e|"
+    r"rest[- ]of[- ]season|\bros\b|playoff|keeper|who (?:do|should) i keep)\b",
+    re.IGNORECASE,
+)
+
+
+def _wants_deep(text: str) -> bool:
+    return bool(_DEEP_PATTERNS.search(text))
+
+
+async def _answer(update: Update, question: str, deep: bool) -> None:
+    """Shared free-form answer flow for on_message and /deep."""
     if not question:
+        await _send(update, "Ask me anything, e.g. <code>who should I start at FLEX?</code>")
         return
     if not config.ENABLE_GROK:
         await _send(
@@ -241,12 +254,16 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         )
         return
     await _typing(update)
+    note = "🔎 On it — searching X + news…"
+    if deep:
+        note += " (deep analysis with grok-4.5)"
+    await update.effective_chat.send_message(note)
     try:
         ctx = await _ctx()
         team_ctx = analysis.team_context_summary(ctx)
     except Exception:
         team_ctx = ""  # still answer, just without personalization
-    result = await grok.answer_question(question, team_ctx)
+    result = await grok.answer_question(question, team_ctx, deep=deep)
     if not result:
         await _send(update, "No response from Grok.")
         return
@@ -257,6 +274,20 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             f"• {digest.esc(c)}" for c in cites[:5]
         )
     await _send(update, text)
+
+
+@authorized_only
+async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Free-form Q&A. Auto-routes high-stakes questions to the flagship model."""
+    question = (update.message.text or "").strip() if update.message else ""
+    await _answer(update, question, deep=_wants_deep(question))
+
+
+@authorized_only
+async def cmd_deep(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Force the flagship model for a big decision: /deep <question>."""
+    question = " ".join(context.args).strip() if context.args else ""
+    await _answer(update, question, deep=True)
 
 
 @authorized_only
@@ -338,6 +369,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("roster", cmd_roster))
     app.add_handler(CommandHandler("trending", cmd_trending))
     app.add_handler(CommandHandler("player", cmd_player))
+    app.add_handler(CommandHandler("deep", cmd_deep))
     app.add_handler(CommandHandler("gameday", cmd_gameday))
     # Any plain text that isn't a command → free-form Q&A. Registered last so
     # it never shadows the command handlers above.
