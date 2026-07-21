@@ -144,6 +144,10 @@ def _answer_instructions(team_context: str) -> str:
         "Use it as ground truth:\n"
         + (team_context or "(league context unavailable)")
         + "\n\nRules: Always answer in FANTASY terms — not general NFL talk. "
+        "ALWAYS apply THIS league's exact scoring, roster settings (FLEX count, "
+        "no kicker, etc.) and playoff schedule to every answer automatically — "
+        "the user should never have to say 'in my scoring.' Never give generic, "
+        "league-agnostic advice; tailor everything to the settings above. "
         "When a specific player comes up, always cover: (1) their fantasy value "
         "THIS season and how soon they help (this week vs. later / rest-of-"
         "season), (2) whether they're rostered in THIS league or a free agent "
