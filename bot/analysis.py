@@ -9,6 +9,7 @@ adds/drops), injury status, and positional depth vs. required starters.
 
 import time
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Optional
 
 from . import config
@@ -74,13 +75,42 @@ async def resolve_user_id(client: SleeperClient) -> Optional[str]:
 
 
 async def resolve_league_id(client: SleeperClient, user_id: Optional[str]) -> Optional[str]:
+    """Find the league to use. An explicit LEAGUE_ID always wins. Otherwise
+    auto-detect from the user's leagues, matching LEAGUE_NAME, trying the
+    current NFL season first then recent past seasons — so the bot follows the
+    manager into a new league each year and still works in the offseason."""
     if config.LEAGUE_ID:
         return config.LEAGUE_ID
-    if user_id:
-        leagues = await client.get_user_leagues(user_id, config.SEASON)
-        if leagues:
+    if not user_id:
+        return None
+
+    try:
+        current = int((await client.get_nfl_state()).get("season") or 0)
+    except Exception:
+        current = 0
+    if not current:
+        current = datetime.now().year
+    seasons = [str(current), str(current - 1), str(current - 2)]
+
+    target = (config.LEAGUE_NAME or "").strip().lower()
+    fallback = None
+    for season in seasons:
+        try:
+            leagues = await client.get_user_leagues(user_id, season)
+        except Exception:
+            continue
+        if not leagues:
+            continue
+        if fallback is None:
+            fallback = leagues[0].get("league_id")
+        if target:
+            for lg in leagues:
+                if (lg.get("name") or "").strip().lower() == target:
+                    return lg.get("league_id")
+        else:
             return leagues[0].get("league_id")
-    return None
+    # Name didn't match anywhere, but the manager has leagues — use the newest.
+    return fallback
 
 
 async def build_context(client: SleeperClient, force: bool = False) -> LeagueContext:
@@ -128,7 +158,7 @@ async def build_context(client: SleeperClient, force: bool = False) -> LeagueCon
         my_user_id=user_id or "",
         my_roster=my_roster,
         week=week,
-        season=config.SEASON,
+        season=str(league.get("season") or config.SEASON),
         faab_total=faab_total,
         faab_used=faab_used,
         rostered_ids=rostered_ids,

@@ -51,12 +51,14 @@ SLEEPER_USERNAME = os.getenv("SLEEPER_USERNAME")
 # for this league — the bot works even if the host's env vars aren't set.
 # Override via env vars to point at a different team/league.
 SLEEPER_USER_ID = os.getenv("SLEEPER_USER_ID", "1267645505593147392")  # Koodini
-# If you're in multiple leagues, pin the one you want. Otherwise the bot
-# uses the first league it finds for the season.
-LEAGUE_ID = os.getenv("LEAGUE_ID", "1251988282942685184")  # "Show me your TDs"
-# "Show me your TDs" is a 2025-season league. When you draft your 2026 league,
-# set LEAGUE_ID to the new one and bump SEASON (or set SEASON=2026 env var).
-SEASON = os.getenv("SEASON", "2025")
+# Leave LEAGUE_ID unset to AUTO-DETECT: the bot finds your league by
+# SLEEPER_USER_ID + LEAGUE_NAME for the current NFL season, falling back to
+# recent past seasons in the offseason — so it follows you into a new league
+# each year with zero edits. Set LEAGUE_ID to pin a specific league instead.
+LEAGUE_ID = os.getenv("LEAGUE_ID")
+LEAGUE_NAME = os.getenv("LEAGUE_NAME", "Show me your TDs")
+# Season is derived from the resolved league; this is only a display fallback.
+SEASON = os.getenv("SEASON", str(datetime.now().year))
 
 # --- League strategy --------------------------------------------------------
 # redraft | dynasty | keeper. Steers Grok toward this-season vs. long-term
