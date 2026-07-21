@@ -274,10 +274,33 @@ def team_context_summary(ctx: LeagueContext) -> str:
         if is_offseason(ctx)
         else ""
     )
+    flex_ct = sum(1 for s in starters if s in FLEX_ELIGIBILITY)
+    slot_extras = []
+    if flex_ct:
+        slot_extras.append(f"{flex_ct} FLEX")
+    slot_extras.append("no kicker" if "K" not in starters else "kicker")
+
+    settings = ctx.league.get("settings") or {}
+    p_start = settings.get("playoff_week_start")
+    p_teams = settings.get("playoff_teams")
+    playoff_line = None
+    if p_start:
+        rounds = max(1, (int(p_teams) - 1).bit_length()) if p_teams else 3
+        champ = int(p_start) + rounds - 1
+        playoff_line = (
+            f"Playoffs: {p_teams} of {len(ctx.rosters)} teams make it, Weeks "
+            f"{p_start}-{champ} (championship Week {champ}) — weigh the Weeks "
+            f"{p_start}-{champ} schedule for rest-of-season and keeper value"
+        )
+
     lines = [
         f"League: {ctx.league.get('name', 'League')} | {len(ctx.rosters)}-team | "
         f"{fmt} | Week {ctx.week} {ctx.season}{off}",
-        f"Starting slots: {', '.join(starters)}",
+        f"Starting slots: {', '.join(starters)} ({', '.join(slot_extras)})",
+    ]
+    if playoff_line:
+        lines.append(playoff_line)
+    lines += [
         f"FAAB remaining: ${ctx.faab_remaining} of ${ctx.faab_total}",
         "Your roster:",
     ]
