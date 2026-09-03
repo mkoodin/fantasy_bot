@@ -259,6 +259,42 @@ _DRAFT_DIRECTIVE = (
 )
 
 
+# Trade questions. Grounding matters most here: an unpriced trade call is how
+# you end up shipping a league-winner for a bench flier.
+_TRADE_PATTERNS = re.compile(
+    r"\b(trade|trading|traded|buy low|sell high|package|two[- ]for[- ]one|"
+    r"swap|offer for|deal for|give up|worth it for)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_trade(text: str) -> bool:
+    return bool(_TRADE_PATTERNS.search(text))
+
+
+_TRADE_DIRECTIVE = (
+    "\n\n[TRADE QUESTION — price both sides before you propose anything. "
+    "Work in this order. (1) BASELINE: read the VALUE BOARD and the per-player "
+    "brackets in the league context — market rank, projected points in this "
+    "league's scoring, and the round this league drafted them. That is your "
+    "starting price for every player involved. (2) ADJUST: live-search current "
+    "rest-of-season rankings and expert consensus, plus the last few days of X "
+    "discussion from the trusted voices listed above, and move a player off his "
+    "baseline only where the reporting justifies it — role or snap-count change, "
+    "injury, a shifted depth chart, a schedule swing. Say what moved him and why. "
+    "(3) VERDICT: state each side's value explicitly before you recommend it, in "
+    "the form 'I send X (rank/proj) for Y (rank/proj)'. If the two sides are far "
+    "apart on the board, either fix the package by adding pieces or name the "
+    "specific, sourced reason the market is wrong — never wave it away. "
+    "Never recommend sending a clearly higher-ranked, higher-projected player "
+    "for a lower-ranked one as a straight swap. Where the ask is to acquire a "
+    "specific player, build the offer from my most expendable pieces — depth at "
+    "a position I'm deep in, players buried behind my starters — not from my "
+    "best players. Finally, sanity-check the deal from the OTHER manager's side: "
+    "if they would obviously decline, say so and adjust.]"
+)
+
+
 # Streaming / strength-of-schedule / weekly-matchup questions.
 _MATCHUP_PATTERNS = re.compile(
     r"\b(stream|streaming|strength of schedule|\bsos\b|schedule|matchup|"
@@ -279,6 +315,16 @@ _MATCHUP_DIRECTIVE = (
     "or playoff streaming is implied). Distinguish who's the best play THIS week "
     "from who has the ideal upcoming/playoff run, and name concrete streamers "
     "with the specific weeks they're best.]"
+)
+
+
+_VALUATION_DIRECTIVE = (
+    "\n\n[VALUATION — anchor any claim about a player's worth in the numbers "
+    "already in the league context (market rank, projected points in this "
+    "league's scoring, draft round), then layer the live read on top: current "
+    "expert rankings and the recent X discussion from the trusted voices. "
+    "State the number when it carries the argument. Never rank players from "
+    "memory alone when the context or a search can price them.]"
 )
 
 
@@ -303,12 +349,17 @@ async def _answer(
     # Draft/ADP questions are ungrounded from memory — force the flagship and
     # make it pull current consensus ADP/rankings first. Keep the user's
     # original wording in history; only the Grok call sees the directive.
-    grok_question = question
+    grok_question = question + _VALUATION_DIRECTIVE
     if _is_draft(question):
         deep = True
         grok_question += _DRAFT_DIRECTIVE
     if _is_matchup(question):
         grok_question += _MATCHUP_DIRECTIVE
+    # Trades are the highest-stakes call the bot makes: always price them with
+    # the flagship model against the value board.
+    if _is_trade(question):
+        deep = True
+        grok_question += _TRADE_DIRECTIVE
     await _typing(update)
     note = "🔎 On it — analyzing your league + live X/news…"
     if deep:
@@ -421,6 +472,21 @@ async def cmd_diag(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         lines.append(
             f"\n✅ League loaded: <b>{digest.esc(ctx.league.get('name'))}</b> — "
             f"your team: <b>{digest.esc(ctx.team_name(ctx.my_user_id))}</b>"
+        )
+        # The value signals behind every trade/start-sit call. Projections come
+        # from an undocumented Sleeper endpoint, so surface when they're absent
+        # rather than letting advice quietly fall back to vibes.
+        lines.append(
+            f"Market ranks: {yn(ctx.market_ranks)} "
+            f"({len(ctx.market_ranks)} players)"
+        )
+        lines.append(
+            f"Draft picks: {yn(ctx.draft_picks)} ({len(ctx.draft_picks)} picks)"
+        )
+        lines.append(
+            f"Projections: {yn(ctx.has_projections)} "
+            f"({len(ctx.week_projections)} this week, "
+            f"{len(ctx.season_projections)} season)"
         )
     except Exception as exc:
         lines.append(f"\n❌ League load failed: <code>{digest.esc(exc)}</code>")

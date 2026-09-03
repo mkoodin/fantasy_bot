@@ -15,6 +15,11 @@ import requests
 
 BASE = "https://api.sleeper.app/v1"
 
+# Projections live outside the documented /v1 API and Sleeper has served them
+# from both hosts over time. We try each in turn and treat the whole feature
+# as best-effort: if none answer, callers simply get no projections.
+_PROJECTION_HOSTS = ("https://api.sleeper.com", "https://api.sleeper.app")
+
 # Positions we treat as fantasy-relevant when scanning free agents.
 FANTASY_POSITIONS = {"QB", "RB", "WR", "TE", "K", "DEF"}
 
@@ -30,10 +35,22 @@ class SleeperClient:
         self._session = requests.Session()
         self._players: Optional[dict[str, Any]] = None
         self._players_ts: float = 0.0
+        # Projections are keyed by (season, week) — week None means season-long.
+        self._projections: dict[tuple[str, Optional[int]], Any] = {}
+        self._projections_ts: dict[tuple[str, Optional[int]], float] = {}
 
     async def _get(self, path: str) -> Any:
         def do() -> Any:
             resp = self._session.get(f"{BASE}{path}", timeout=25)
+            resp.raise_for_status()
+            return resp.json()
+
+        return await asyncio.to_thread(do)
+
+    async def _get_url(self, url: str) -> Any:
+        """Fetch an absolute URL (for endpoints outside the /v1 base)."""
+        def do() -> Any:
+            resp = self._session.get(url, timeout=25)
             resp.raise_for_status()
             return resp.json()
 
@@ -73,6 +90,61 @@ class SleeperClient:
             f"/players/nfl/trending/{kind}?lookback_hours={lookback_hours}&limit={limit}"
         )
 
+    # --- Draft ---------------------------------------------------------------
+    async def get_league_drafts(self, league_id: str) -> list[dict]:
+        """All drafts for a league, newest first per Sleeper's ordering."""
+        return await self._get(f"/league/{league_id}/drafts")
+
+    async def get_draft_picks(self, draft_id: str) -> list[dict]:
+        """Every pick in a draft: round, pick_no, roster_id, player_id, metadata."""
+        return await self._get(f"/draft/{draft_id}/picks")
+
+    # --- Projections (undocumented, best-effort) -----------------------------
+    async def get_projections(
+        self,
+        season: str,
+        week: Optional[int] = None,
+        max_age: int = 3_600,
+    ) -> list[dict]:
+        """Sleeper's own player projections. Week None = season-long totals.
+
+        This endpoint isn't part of the documented API, so it is treated as a
+        bonus signal: any failure returns [] and the caller carries on without
+        projections rather than breaking the whole answer.
+        """
+        key = (str(season), week)
+        now = time.time()
+        cached = self._projections.get(key)
+        if cached is not None and now - self._projections_ts.get(key, 0.0) < max_age:
+            return cached
+
+        positions = "".join(f"&position[]={p}" for p in sorted(FANTASY_POSITIONS))
+        path = f"/projections/nfl/{season}"
+        if week is not None:
+            path += f"/{week}"
+        query = f"?season_type=regular&order_by=ppr{positions}"
+
+        rows: list[dict] = []
+        for host in _PROJECTION_HOSTS:
+            try:
+                data = await self._get_url(f"{host}{path}{query}")
+            except Exception:
+                continue
+            # Sleeper has returned both a bare list and a player_id-keyed dict.
+            if isinstance(data, dict):
+                data = [
+                    {**v, "player_id": v.get("player_id", k)}
+                    for k, v in data.items()
+                    if isinstance(v, dict)
+                ]
+            if isinstance(data, list) and data:
+                rows = data
+                break
+
+        self._projections[key] = rows
+        self._projections_ts[key] = now
+        return rows
+
     # --- Player dictionary (cached) ----------------------------------------
     async def get_players(self, max_age: int = 86_400) -> dict[str, Any]:
         now = time.time()
@@ -82,6 +154,18 @@ class SleeperClient:
         self._players = data
         self._players_ts = now
         return data
+
+
+def projected_points(row: dict, scoring_key: str = "pts_ppr") -> Optional[float]:
+    """Pull the league-appropriate projected points out of a projection row."""
+    stats = row.get("stats") if isinstance(row.get("stats"), dict) else row
+    if not isinstance(stats, dict):
+        return None
+    for key in (scoring_key, "pts_ppr", "pts_half_ppr", "pts_std"):
+        val = stats.get(key)
+        if isinstance(val, (int, float)):
+            return float(val)
+    return None
 
 
 def player_name(player: Optional[dict]) -> str:

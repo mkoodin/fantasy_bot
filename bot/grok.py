@@ -140,8 +140,11 @@ def _answer_instructions(team_context: str) -> str:
         + " "
         + _trusted_directive()
         + "\n\nLive league context — the user's team, ALL rosters (who owns "
-        "whom), each team's remaining FAAB, and notable available free agents. "
-        "Use it as ground truth:\n"
+        "whom), a VALUE BOARD pricing the top players at each position, each "
+        "team's remaining FAAB, and notable available free agents. Players "
+        "carry their value signals in brackets: market rank (lower = better), "
+        "projected points in this league's scoring, and the round this league "
+        "drafted them. Use all of it as ground truth:\n"
         + (team_context or "(league context unavailable)")
         + "\n\nRules: Always answer in FANTASY terms — not general NFL talk. "
         "ALWAYS apply THIS league's exact scoring, roster settings (FLEX count, "
@@ -161,11 +164,20 @@ def _answer_instructions(team_context: str) -> str:
         "opportunities (e.g. a hurt starter making a handcuff a must-add) and "
         "how long the window lasts. For trades, only propose players actually on "
         "another team's roster, and target managers whose needs complement "
-        "yours. Be concise and decision-oriented; "
+        "yours. PRICE EVERY TRADE before proposing it: start from the value "
+        "signals above, adjust with what your search actually found (role, "
+        "injury, snap counts, expert rankings, the trusted voices' takes), and "
+        "state both sides' value in the answer. Never propose sending a "
+        "clearly better player — higher market rank, higher projection, "
+        "earlier draft round — for a worse one without naming the specific, "
+        "sourced reason the market is wrong; when in doubt, build the offer "
+        "from the user's expendable depth, not their best players. "
+        "Be concise and decision-oriented; "
         "if you make a start/sit, add/drop, bid, or trade call, state it clearly "
         "with a one-line why. Write plain text prose only — no markdown, "
         "asterisks, headers, or bracketed citations. Keep it under ~180 words "
-        "unless the question truly needs more."
+        "unless the question truly needs more — a trade call that has to show "
+        "both sides' value earns the extra room."
     )
 
 

@@ -81,12 +81,25 @@ scheduled digests. No Railway Cron needed; the scheduler is internal.
   starters (including flex demand on RB/WR/TE).
 - **Drops** are scored from injury status, league-wide drop velocity, and how
   buried a player is on your depth chart.
+- **Player value** — used for trades, start/sit and waiver calls — is built in
+  two layers. The Sleeper layer comes first and is the baseline: each player's
+  consensus market rank, projected points converted to *your* league's scoring,
+  and the round your league actually drafted them in. Every roster line and the
+  league-wide **value board** carry those numbers, so both sides of a trade are
+  priced before anything is proposed. The X layer then adjusts that baseline —
+  current expert rankings plus recent discussion from the analysts in
+  `X_TRUSTED_HANDLES` can move a player off his price for a role change,
+  injury, or depth-chart shift, but the model has to say what moved him. A
+  lopsided swap can't be recommended without explicitly arguing the market is
+  wrong.
 
 ## Notes & limitations
 
-- Sleeper doesn't expose projections or bye weeks in the players feed, so the
-  strategy layer uses market velocity + injuries + depth rather than projected
-  points. Everything carries a plain-English reason.
+- Projections come from a Sleeper endpoint that isn't part of the documented
+  API, so they're treated as a bonus signal: if it stops answering, the bot
+  falls back to market rank, draft capital, add/drop velocity, injuries and
+  depth without breaking. `/diag` reports whether projections, market ranks and
+  draft picks actually loaded. Everything carries a plain-English reason.
 - Without `XAI_API_KEY`, the bot runs fully on Sleeper data; only the live
   X/news buzz (`/player` and the buzz block in digests) is disabled.
 - The bot only talks to the single `TELEGRAM_CHAT_ID` you configure.

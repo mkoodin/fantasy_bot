@@ -3,8 +3,10 @@
 This is where roster construction, positional needs, FAAB bids and drop
 candidates are computed. The heuristics are intentionally simple and
 explainable — every recommendation carries a human-readable reason. Sleeper
-doesn't expose projections, so signals used are: market velocity (trending
-adds/drops), injury status, and positional depth vs. required starters.
+serves projections only through an undocumented endpoint, so they are a
+best-effort bonus signal layered on top of the reliable ones: market rank,
+market velocity (trending adds/drops), draft capital, injury status, and
+positional depth vs. required starters.
 """
 
 import time
@@ -18,6 +20,7 @@ from .sleeper import (
     SleeperClient,
     is_out,
     player_name,
+    projected_points,
 )
 
 # Roster slots that don't count as "starters needed" at a fixed position.
@@ -48,6 +51,18 @@ class LeagueContext:
     faab_used: int
     rostered_ids: set[str] = field(default_factory=set)
     season_type: str = ""  # "regular" | "post" | "off" | "pre" from NFL state
+    # player_id -> {"round", "pick", "overall"} from this league's own draft.
+    draft_picks: dict[str, dict] = field(default_factory=dict)
+    # player_id -> projected points for the current week, in league scoring.
+    week_projections: dict[str, float] = field(default_factory=dict)
+    # player_id -> projected points for the full season, in league scoring.
+    season_projections: dict[str, float] = field(default_factory=dict)
+    # player_id -> (positional rank, overall rank) by Sleeper's market rank.
+    market_ranks: dict[str, tuple[int, int]] = field(default_factory=dict)
+
+    @property
+    def has_projections(self) -> bool:
+        return bool(self.week_projections or self.season_projections)
 
     @property
     def faab_remaining(self) -> int:
@@ -166,6 +181,18 @@ async def build_context(client: SleeperClient, force: bool = False) -> LeagueCon
         rostered_ids=rostered_ids,
         season_type=season_type,
     )
+
+    # Value signals. Each is optional on its own — a missing one degrades the
+    # answer, but a failure here must never cost us the league data above.
+    ctx.market_ranks = compute_market_ranks(ctx)
+    ctx.draft_picks = await load_draft_picks(ctx, client)
+    try:
+        ctx.week_projections, ctx.season_projections = await load_projections(
+            ctx, client
+        )
+    except Exception:
+        ctx.week_projections, ctx.season_projections = {}, {}
+
     _cache["ctx"] = ctx
     _cache["ts"] = now
     return ctx
@@ -259,6 +286,203 @@ def need_positions(ctx: LeagueContext, threshold: int = 1) -> set[str]:
     return {n["position"] for n in positional_needs(ctx) if n["severity"] >= threshold}
 
 
+# --- Valuation layer --------------------------------------------------------
+# Rosters alone tell Grok who owns whom but nothing about what anyone is WORTH,
+# which is how you end up recommending a league-winning back for a mid-round
+# flier. These helpers attach a market rank, a projection and the league's own
+# draft capital to every player so trade and start/sit calls are anchored to
+# numbers instead of the model's memory of last season.
+
+# Sleeper marks irrelevant players with a sentinel search_rank instead of null.
+_RANK_SENTINEL = 9_999_990
+
+
+def _scoring_key(ctx: "LeagueContext") -> str:
+    """Which projected-points field matches this league's scoring."""
+    ppr = (ctx.league.get("scoring_settings") or {}).get("rec")
+    if ppr == 1:
+        return "pts_ppr"
+    if ppr == 0.5:
+        return "pts_half_ppr"
+    return "pts_std"
+
+
+def _market_rank(player: Optional[dict]) -> Optional[int]:
+    """Sleeper's own market rank for a player (lower = more valuable)."""
+    if not player:
+        return None
+    rank = player.get("search_rank")
+    if not isinstance(rank, (int, float)) or rank >= _RANK_SENTINEL:
+        return None
+    return int(rank)
+
+
+def compute_market_ranks(ctx: "LeagueContext") -> dict[str, tuple[int, int]]:
+    """Turn Sleeper's raw search_rank into readable RB8 / overall-24 ranks.
+
+    Ranked over every fantasy-relevant player on an NFL roster, so the numbers
+    mean the same thing for a rostered star and a free agent.
+    """
+    ranked = []
+    for pid, p in ctx.players.items():
+        if (p.get("position") or "") not in FANTASY_POSITIONS:
+            continue
+        rank = _market_rank(p)
+        if rank is None or not p.get("team"):
+            continue
+        ranked.append((rank, pid, p.get("position")))
+    ranked.sort()
+
+    out: dict[str, tuple[int, int]] = {}
+    per_pos: dict[str, int] = {}
+    for overall, (_, pid, pos) in enumerate(ranked, start=1):
+        per_pos[pos] = per_pos.get(pos, 0) + 1
+        out[pid] = (per_pos[pos], overall)
+    return out
+
+
+async def load_draft_picks(ctx: "LeagueContext", client: SleeperClient) -> dict[str, dict]:
+    """Where each rostered player went in THIS league's draft.
+
+    Draft slot is the league's own consensus price for a player, which is the
+    cleanest available read on who was expensive and who was a late flier.
+    """
+    try:
+        drafts = await client.get_league_drafts(ctx.league.get("league_id", ""))
+    except Exception:
+        return {}
+    if not drafts:
+        return {}
+    # Sleeper returns newest first; prefer a completed draft for this season.
+    draft = next(
+        (
+            d
+            for d in drafts
+            if str(d.get("season")) == str(ctx.season)
+            and (d.get("status") or "") == "complete"
+        ),
+        drafts[0],
+    )
+    try:
+        picks = await client.get_draft_picks(draft.get("draft_id", ""))
+    except Exception:
+        return {}
+
+    out: dict[str, dict] = {}
+    for pick in picks or []:
+        pid = pick.get("player_id")
+        if not pid:
+            continue
+        out[str(pid)] = {
+            "round": pick.get("round"),
+            "pick": pick.get("draft_slot") or pick.get("pick_no"),
+            "overall": pick.get("pick_no"),
+        }
+    return out
+
+
+async def load_projections(
+    ctx: "LeagueContext", client: SleeperClient
+) -> tuple[dict[str, float], dict[str, float]]:
+    """This week's and the full season's projected points, in league scoring.
+
+    Best-effort: the endpoint is undocumented, so an empty result just means
+    the other value signals carry the answer.
+    """
+    key = _scoring_key(ctx)
+
+    async def fetch(week: Optional[int]) -> dict[str, float]:
+        try:
+            rows = await client.get_projections(ctx.season, week)
+        except Exception:
+            return {}
+        out: dict[str, float] = {}
+        for row in rows or []:
+            pid = row.get("player_id")
+            pts = projected_points(row, key)
+            if pid and pts is not None:
+                out[str(pid)] = round(pts, 1)
+        return out
+
+    week_proj = {} if is_offseason(ctx) else await fetch(ctx.week)
+    season_proj = await fetch(None)
+    return week_proj, season_proj
+
+
+def value_tag(ctx: "LeagueContext", pid: str) -> str:
+    """Compact value annotation for one player: rank, projections, draft cost.
+
+    Rendered inline next to every name so the model can't discuss a trade
+    without seeing both sides' prices.
+    """
+    bits = []
+    ranks = ctx.market_ranks.get(pid)
+    if ranks:
+        pos_rank, overall = ranks
+        pos = (ctx.players.get(pid) or {}).get("position") or "?"
+        bits.append(f"mkt {pos}{pos_rank}/ovr{overall}")
+    season = ctx.season_projections.get(pid)
+    if season is not None:
+        bits.append(f"proj {season}pts/season")
+    week = ctx.week_projections.get(pid)
+    if week is not None:
+        bits.append(f"{week} this wk")
+    drafted = ctx.draft_picks.get(pid)
+    if drafted and drafted.get("round"):
+        bits.append(f"drafted R{drafted['round']}")
+    elif ctx.draft_picks:
+        bits.append("undrafted")
+    return ", ".join(bits)
+
+
+def value_board_context(ctx: "LeagueContext", per_pos: int = 18) -> str:
+    """A ranked, league-wide price sheet: the top players at each position with
+    their value signals and current owner.
+
+    This is the tiering that makes an unbalanced trade obvious — a top-5 back
+    and a fringe starter sit visibly far apart on the same list.
+    """
+    if not ctx.market_ranks:
+        return ""
+    owner_by_pid: dict[str, str] = {}
+    for r in ctx.rosters:
+        owner = ctx.team_name(r.get("owner_id", ""))
+        if r.get("owner_id") == ctx.my_user_id:
+            owner += " (YOU)"
+        for pid in r.get("players") or []:
+            owner_by_pid[pid] = owner
+
+    lines = [
+        "VALUE BOARD — the price sheet for this league. Market rank is "
+        "Sleeper's own consensus ranking (lower = more valuable); projections "
+        "are in THIS league's scoring; draft round is what this league "
+        "actually paid. Treat a large gap in these numbers as a real value "
+        "gap: never propose sending a clearly higher-ranked, higher-projected "
+        "player for a lower one unless you explicitly justify why the market "
+        "is wrong."
+    ]
+    for pos in ("QB", "RB", "WR", "TE"):
+        entries = [
+            (ranks[0], pid)
+            for pid, ranks in ctx.market_ranks.items()
+            if (ctx.players.get(pid) or {}).get("position") == pos
+        ]
+        entries.sort()
+        rows = []
+        for _, pid in entries[:per_pos]:
+            p = ctx.players.get(pid) or {}
+            owner = owner_by_pid.get(pid, "FREE AGENT")
+            tag = value_tag(ctx, pid)
+            name = player_name(p)
+            if p.get("injury_status"):
+                name += f" ({p['injury_status']})"
+            rows.append(f"    {name} [{tag}] — {owner}")
+        if rows:
+            lines.append(f"  {pos}:")
+            lines.extend(rows)
+    return "\n".join(lines)
+
+
 def team_context_summary(ctx: LeagueContext) -> str:
     """Compact, model-friendly summary of the user's team for personalized Q&A."""
     scoring = ctx.league.get("scoring_settings") or {}
@@ -323,6 +547,9 @@ def team_context_summary(ctx: LeagueContext) -> str:
             nm = player_name(p)
             if p.get("injury_status"):
                 nm += f" ({p.get('injury_status')})"
+            tag = value_tag(ctx, p.get("player_id", ""))
+            if tag:
+                nm += f" [{tag}]"
             names.append(nm)
         lines.append(f"  {pos}: {', '.join(names)}")
 
@@ -340,7 +567,10 @@ def league_rosters_context(ctx: LeagueContext) -> str:
     availability and trade questions."""
     lines = [
         "Full league rosters — who owns whom. Any fantasy-relevant player NOT "
-        "listed below is a FREE AGENT available to add:"
+        "listed below is a FREE AGENT available to add. Each player carries "
+        "their value signals in brackets: mkt = consensus market rank (lower "
+        "is better), proj = projected points in this league's scoring, and the "
+        "round this league drafted them in:"
     ]
     for r in sorted(ctx.rosters, key=lambda x: x.get("roster_id", 0)):
         owner = ctx.team_name(r.get("owner_id", ""))
@@ -355,6 +585,9 @@ def league_rosters_context(ctx: LeagueContext) -> str:
             tag = f"{player_name(p)} ({pos}-{team})"
             if is_out(p):
                 tag += f"[{p.get('injury_status')}]"
+            value = value_tag(ctx, pid)
+            if value:
+                tag += f" [{value}]"
             names.append(tag)
         lines.append(f"{owner}{mine}: {', '.join(names) if names else '(empty)'}")
     return "\n".join(lines)
@@ -467,6 +700,7 @@ async def full_league_context(ctx: LeagueContext, client: SleeperClient) -> str:
         team_context_summary(ctx),
         scoring_context(ctx),
         league_rosters_context(ctx),
+        value_board_context(ctx),
         league_faab_context(ctx),
     ]
     fa = await available_fa_context(ctx, client)
@@ -515,7 +749,9 @@ async def available_fa_context(
         bucket = by_pos.setdefault(pos, [])
         if len(bucket) < per_pos:
             team = p.get("team")
-            bucket.append(player_name(p) + (f" ({team})" if team else ""))
+            entry_name = player_name(p) + (f" ({team})" if team else "")
+            tag = value_tag(ctx, pid)
+            bucket.append(entry_name + (f" [{tag}]" if tag else ""))
 
     if not by_pos:
         return ""
