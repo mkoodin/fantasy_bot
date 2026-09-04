@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Optional
 
-from . import config
+from . import config, valuation
 from .sleeper import (
     FANTASY_POSITIONS,
     SleeperClient,
@@ -59,6 +59,10 @@ class LeagueContext:
     season_projections: dict[str, float] = field(default_factory=dict)
     # player_id -> (positional rank, overall rank) by Sleeper's market rank.
     market_ranks: dict[str, tuple[int, int]] = field(default_factory=dict)
+    # player_id -> {"score", "vorp", "points", "replacement"} from valuation.
+    player_values: dict[str, dict] = field(default_factory=dict)
+    # player_id -> CORE / STARTER / DEPTH / EXPENDABLE, for your roster only.
+    roster_tiers: dict[str, str] = field(default_factory=dict)
 
     @property
     def has_projections(self) -> bool:
@@ -192,6 +196,12 @@ async def build_context(client: SleeperClient, force: bool = False) -> LeagueCon
         )
     except Exception:
         ctx.week_projections, ctx.season_projections = {}, {}
+
+    # Derived pricing. Runs on whatever signals arrived: with projections it's
+    # real points over replacement, without them it degrades to a curve fitted
+    # to market rank, so trade logic keeps working either way.
+    ctx.player_values = valuation.compute_values(ctx)
+    ctx.roster_tiers = valuation.roster_tiers(ctx)
 
     _cache["ctx"] = ctx
     _cache["ts"] = now
@@ -416,6 +426,9 @@ def value_tag(ctx: "LeagueContext", pid: str) -> str:
     without seeing both sides' prices.
     """
     bits = []
+    value = ctx.player_values.get(pid)
+    if value:
+        bits.append(f"val {value['score']}/100")
     ranks = ctx.market_ranks.get(pid)
     if ranks:
         pos_rank, overall = ranks
@@ -452,24 +465,33 @@ def value_board_context(ctx: "LeagueContext", per_pos: int = 18) -> str:
         for pid in r.get("players") or []:
             owner_by_pid[pid] = owner
 
+    levels = valuation.replacement_levels(ctx)
+    level_note = ", ".join(
+        f"{pos} {pts:.0f}pts" for pos, pts in sorted(levels.items())
+    )
     lines = [
-        "VALUE BOARD — the price sheet for this league. Market rank is "
-        "Sleeper's own consensus ranking (lower = more valuable); projections "
-        "are in THIS league's scoring; draft round is what this league "
-        "actually paid. Treat a large gap in these numbers as a real value "
-        "gap: never propose sending a clearly higher-ranked, higher-projected "
-        "player for a lower one unless you explicitly justify why the market "
-        "is wrong."
+        "VALUE BOARD — the price sheet for this league, sorted by computed "
+        "value. 'val' is a 0-100 score built from projected points ABOVE the "
+        "replacement-level player at that position, using this league's own "
+        "starter requirements, then discounted for injury. It is directly "
+        "comparable ACROSS positions — a QB and a RB with the same score are "
+        "worth the same in a trade, even though the QB scores more raw points. "
+        "A score of 0 means waiver-level: freely replaceable. Replacement "
+        f"baselines this league: {level_note or 'unavailable'}. "
+        "Market rank is Sleeper's consensus ranking (lower = better); draft "
+        "round is what this league actually paid. Treat a large gap in value "
+        "as a real gap: never propose sending a clearly higher-valued player "
+        "for a lower one unless you explicitly justify why the market is wrong."
     ]
     for pos in ("QB", "RB", "WR", "TE"):
         entries = [
-            (ranks[0], pid)
+            (-(ctx.player_values.get(pid) or {}).get("score", 0.0), ranks[0], pid)
             for pid, ranks in ctx.market_ranks.items()
             if (ctx.players.get(pid) or {}).get("position") == pos
         ]
         entries.sort()
         rows = []
-        for _, pid in entries[:per_pos]:
+        for _, _, pid in entries[:per_pos]:
             p = ctx.players.get(pid) or {}
             owner = owner_by_pid.get(pid, "FREE AGENT")
             tag = value_tag(ctx, pid)
@@ -701,6 +723,7 @@ async def full_league_context(ctx: LeagueContext, client: SleeperClient) -> str:
         scoring_context(ctx),
         league_rosters_context(ctx),
         value_board_context(ctx),
+        valuation.trade_posture_context(ctx),
         league_faab_context(ctx),
     ]
     fa = await available_fa_context(ctx, client)

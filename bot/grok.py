@@ -19,7 +19,7 @@ from typing import Optional
 
 import requests
 
-from . import config
+from . import config, prompting
 
 # Matches markdown links: [text](url) and citation forms like [[1]](url).
 _MD_LINK = re.compile(r"\[+([^\]]*)\]+\((https?://[^)]+)\)")
@@ -140,11 +140,20 @@ def _answer_instructions(team_context: str) -> str:
         + " "
         + _trusted_directive()
         + "\n\nLive league context — the user's team, ALL rosters (who owns "
-        "whom), a VALUE BOARD pricing the top players at each position, each "
-        "team's remaining FAAB, and notable available free agents. Players "
-        "carry their value signals in brackets: market rank (lower = better), "
-        "projected points in this league's scoring, and the round this league "
-        "drafted them. Use all of it as ground truth:\n"
+        "whom), a VALUE BOARD pricing the top players at each position, the "
+        "user's TRADE POSTURE (which of their players are untouchable vs. "
+        "expendable), each team's remaining FAAB, and notable available free "
+        "agents. Every player carries value signals in brackets. The most "
+        "important is 'val': a 0-100 score measuring projected points ABOVE "
+        "the replacement-level player at that position, computed from this "
+        "league's own scoring and starter requirements and discounted for "
+        "injury. Because it is measured against replacement, it is comparable "
+        "ACROSS positions — a QB and a RB with equal scores are equally "
+        "valuable to trade, even though the QB scores more raw points, and a "
+        "val of 0 means freely replaceable off waivers. The brackets also "
+        "carry market rank (lower = better), raw projected points, and the "
+        "round this league drafted the player. Use all of it as ground "
+        "truth:\n"
         + (team_context or "(league context unavailable)")
         + "\n\nRules: Always answer in FANTASY terms — not general NFL talk. "
         "ALWAYS apply THIS league's exact scoring, roster settings (FLEX count, "
@@ -164,14 +173,14 @@ def _answer_instructions(team_context: str) -> str:
         "opportunities (e.g. a hurt starter making a handcuff a must-add) and "
         "how long the window lasts. For trades, only propose players actually on "
         "another team's roster, and target managers whose needs complement "
-        "yours. PRICE EVERY TRADE before proposing it: start from the value "
-        "signals above, adjust with what your search actually found (role, "
-        "injury, snap counts, expert rankings, the trusted voices' takes), and "
-        "state both sides' value in the answer. Never propose sending a "
-        "clearly better player — higher market rank, higher projection, "
-        "earlier draft round — for a worse one without naming the specific, "
-        "sourced reason the market is wrong; when in doubt, build the offer "
-        "from the user's expendable depth, not their best players. "
+        "yours. PRICE EVERY TRADE before proposing it: total the val scores on "
+        "each side, adjust with what your search actually found (role, injury, "
+        "snap counts, expert rankings, the trusted voices' takes), and state "
+        "both sides' value in the answer. Never propose sending a clearly "
+        "more valuable player for a less valuable one without naming the "
+        "specific, sourced reason the market is wrong; build offers from the "
+        "user's DEPTH and EXPENDABLE players, never their CORE, unless the "
+        "return is clearly larger and you show the math. "
         "Be concise and decision-oriented; "
         "if you make a start/sit, add/drop, bid, or trade call, state it clearly "
         "with a one-line why. Write plain text prose only — no markdown, "
@@ -250,12 +259,27 @@ async def analyze_player(
 async def answer_question(
     question: str,
     team_context: str = "",
-    deep: bool = False,
+    deep: Optional[bool] = None,
     history: Optional[list] = None,
 ) -> Optional[dict]:
     """Answer a free-form question about the user's team, with optional prior
-    conversation turns so follow-ups keep context. {'text', 'citations'}."""
-    messages = list(history or []) + [{"role": "user", "content": question}]
+    conversation turns so follow-ups keep context. {'text', 'citations'}.
+
+    Every caller routes through here, and the analysis directives are attached
+    here rather than by the caller, so a chat question, a scheduled digest and
+    a start/sit call all get the same process.
+
+    `deep` left as None picks the model from the question — high-stakes topics
+    escalate on their own. A caller that passes True or False means it: the
+    scheduled digests run several times a week and choose the cheaper model
+    deliberately, so auto-escalation must not override them.
+    """
+    directed = question + prompting.directives_for(question)
+    # History keeps the user's original wording — directives are per-call
+    # scaffolding, not part of the conversation.
+    messages = list(history or []) + [{"role": "user", "content": directed}]
+    if deep is None:
+        deep = prompting.wants_deep(question)
     return await _run(_answer_instructions(team_context), messages, deep=deep)
 
 

@@ -21,7 +21,7 @@ from telegram.ext import (
     filters,
 )
 
-from . import analysis, config, digest, grok
+from . import analysis, config, digest, grok, prompting, valuation
 from .sleeper import SleeperClient, is_out, player_name
 
 logger = logging.getLogger("fantasy_bot")
@@ -41,6 +41,7 @@ HELP_TEXT = (
     "<b>/player &lt;name&gt;</b> — outlook + availability + FAAB bid for any player\n"
     "<b>/startsit</b> — optimal lineup + start/sit calls for the week\n"
     "<b>/trade</b> — find an ideal trade: fair deal + opening offer + how to pitch\n"
+    "<b>/tradecheck</b> A for B — price a specific offer instantly, no model\n"
     "<b>/deep &lt;question&gt;</b> — force the flagship model for a big call\n"
     "<b>/gameday</b> — quick injury sweep of your starters\n"
     "<b>/reset</b> — clear conversation memory / start a fresh topic\n"
@@ -222,112 +223,6 @@ async def cmd_player(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     await _answer(update, context, question, deep=False)
 
 
-# High-stakes questions worth the flagship model (multi-factor decisions).
-_DEEP_PATTERNS = re.compile(
-    r"\b(trade|trading|optimal lineup|best lineup|set (?:my )?lineup|optimi[sz]e|"
-    r"rest[- ]of[- ]season|\bros\b|playoff|keeper|who (?:do|should) i keep)\b",
-    re.IGNORECASE,
-)
-
-
-def _wants_deep(text: str) -> bool:
-    return bool(_DEEP_PATTERNS.search(text))
-
-
-# Draft/ADP questions — ungrounded without a live ADP/rankings search.
-_DRAFT_PATTERNS = re.compile(
-    r"\b(draft|adp|mock|what round|which round|round \d|draft board|"
-    r"draft position|draft rank|draft strateg|snake draft|auction value|"
-    r"sleepers? to draft|early pick)\b",
-    re.IGNORECASE,
-)
-
-
-def _is_draft(text: str) -> bool:
-    return bool(_DRAFT_PATTERNS.search(text))
-
-
-_DRAFT_DIRECTIVE = (
-    "\n\n[DRAFT/ADP QUESTION — ground this in DATA, not memory. FIRST live-search "
-    "the CURRENT consensus ADP and industry rankings for the upcoming season "
-    "(e.g. FantasyPros, Sleeper ADP, respected analysts). Anchor every round/tier "
-    "claim to that consensus. Then add real edge: flag MISPRICED ADP — undervalued "
-    "sleepers/values whose role, situation, or buzz beats their ADP (target these "
-    "later than their talent), and overpriced reaches whose ADP exceeds their "
-    "outlook (let others overpay) — plus notable ADP risers/fallers, with a "
-    "one-line why for each. It's redraft — value THIS season only.]"
-)
-
-
-# Trade questions. Grounding matters most here: an unpriced trade call is how
-# you end up shipping a league-winner for a bench flier.
-_TRADE_PATTERNS = re.compile(
-    r"\b(trade|trading|traded|buy low|sell high|package|two[- ]for[- ]one|"
-    r"swap|offer for|deal for|give up|worth it for)\b",
-    re.IGNORECASE,
-)
-
-
-def _is_trade(text: str) -> bool:
-    return bool(_TRADE_PATTERNS.search(text))
-
-
-_TRADE_DIRECTIVE = (
-    "\n\n[TRADE QUESTION — price both sides before you propose anything. "
-    "Work in this order. (1) BASELINE: read the VALUE BOARD and the per-player "
-    "brackets in the league context — market rank, projected points in this "
-    "league's scoring, and the round this league drafted them. That is your "
-    "starting price for every player involved. (2) ADJUST: live-search current "
-    "rest-of-season rankings and expert consensus, plus the last few days of X "
-    "discussion from the trusted voices listed above, and move a player off his "
-    "baseline only where the reporting justifies it — role or snap-count change, "
-    "injury, a shifted depth chart, a schedule swing. Say what moved him and why. "
-    "(3) VERDICT: state each side's value explicitly before you recommend it, in "
-    "the form 'I send X (rank/proj) for Y (rank/proj)'. If the two sides are far "
-    "apart on the board, either fix the package by adding pieces or name the "
-    "specific, sourced reason the market is wrong — never wave it away. "
-    "Never recommend sending a clearly higher-ranked, higher-projected player "
-    "for a lower-ranked one as a straight swap. Where the ask is to acquire a "
-    "specific player, build the offer from my most expendable pieces — depth at "
-    "a position I'm deep in, players buried behind my starters — not from my "
-    "best players. Finally, sanity-check the deal from the OTHER manager's side: "
-    "if they would obviously decline, say so and adjust.]"
-)
-
-
-# Streaming / strength-of-schedule / weekly-matchup questions.
-_MATCHUP_PATTERNS = re.compile(
-    r"\b(stream|streaming|strength of schedule|\bsos\b|schedule|matchup|"
-    r"easy run|favorable run|good run|tough stretch|soft stretch|weeks? \d|"
-    r"next few weeks|rest of (?:the )?season|playoff schedule)\b",
-    re.IGNORECASE,
-)
-
-
-def _is_matchup(text: str) -> bool:
-    return bool(_MATCHUP_PATTERNS.search(text))
-
-
-_MATCHUP_DIRECTIVE = (
-    "\n\n[MATCHUP/SCHEDULE QUESTION — ground it in the real NFL schedule. "
-    "Live-search the relevant weeks' matchups and each team's defensive rank vs. "
-    "the position in question (include my playoff Weeks 15-17 when rest-of-season "
-    "or playoff streaming is implied). Distinguish who's the best play THIS week "
-    "from who has the ideal upcoming/playoff run, and name concrete streamers "
-    "with the specific weeks they're best.]"
-)
-
-
-_VALUATION_DIRECTIVE = (
-    "\n\n[VALUATION — anchor any claim about a player's worth in the numbers "
-    "already in the league context (market rank, projected points in this "
-    "league's scoring, draft round), then layer the live read on top: current "
-    "expert rankings and the recent X discussion from the trusted voices. "
-    "State the number when it carries the argument. Never rank players from "
-    "memory alone when the context or a search can price them.]"
-)
-
-
 async def _answer(
     update: Update, context: ContextTypes.DEFAULT_TYPE, question: str, deep: bool
 ) -> None:
@@ -346,20 +241,9 @@ async def _answer(
             "Meanwhile /help lists the commands that work without it.",
         )
         return
-    # Draft/ADP questions are ungrounded from memory — force the flagship and
-    # make it pull current consensus ADP/rankings first. Keep the user's
-    # original wording in history; only the Grok call sees the directive.
-    grok_question = question + _VALUATION_DIRECTIVE
-    if _is_draft(question):
-        deep = True
-        grok_question += _DRAFT_DIRECTIVE
-    if _is_matchup(question):
-        grok_question += _MATCHUP_DIRECTIVE
-    # Trades are the highest-stakes call the bot makes: always price them with
-    # the flagship model against the value board.
-    if _is_trade(question):
-        deep = True
-        grok_question += _TRADE_DIRECTIVE
+    # Directives are attached inside grok.answer_question so every entry
+    # point — chat, commands and scheduled digests — gets the same process.
+    deep = deep or prompting.wants_deep(question)
     await _typing(update)
     note = "🔎 On it — analyzing your league + live X/news…"
     if deep:
@@ -382,7 +266,7 @@ async def _answer(
 
     history = context.chat_data.setdefault("qa_history", [])
     result = await grok.answer_question(
-        grok_question, full_ctx, deep=deep, history=list(history)
+        question, full_ctx, deep=deep, history=list(history)
     )
     if not result:
         await _send(update, "No response from Grok.")
@@ -408,7 +292,7 @@ async def _answer(
 async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Free-form Q&A. Auto-routes high-stakes questions to the flagship model."""
     question = (update.message.text or "").strip() if update.message else ""
-    await _answer(update, context, question, deep=_wants_deep(question))
+    await _answer(update, context, question, deep=prompting.wants_deep(question))
 
 
 @authorized_only
@@ -435,6 +319,73 @@ async def cmd_trade(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         question += f" Build the trade around: {focus}."
     # Trades are multi-factor — always use the flagship model.
     await _answer(update, context, question, deep=True)
+
+
+@authorized_only
+async def cmd_tradecheck(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Price a specific proposal with no model in the loop:
+    /tradecheck <players I send> for <players I get>."""
+    raw = " ".join(context.args).strip() if context.args else ""
+    parts = re.split(r"\s+for\s+", raw, maxsplit=1, flags=re.IGNORECASE)
+    if len(parts) != 2:
+        await _send(
+            update,
+            "Usage: <code>/tradecheck James Cook for Cam Skattebo</code>\n"
+            "Multiple players per side, separated by commas:\n"
+            "<code>/tradecheck Cook, Pittman for Skattebo</code>",
+        )
+        return
+
+    await _typing(update)
+    try:
+        ctx = await _ctx()
+    except Exception as exc:
+        await _send(update, f"⚠️ Couldn't load your league: <code>{digest.esc(exc)}</code>")
+        return
+
+    def resolve(side: str) -> tuple[list[str], list[str]]:
+        found, missing = [], []
+        for name in (n.strip() for n in side.split(",")):
+            if not name:
+                continue
+            pid = valuation.find_player(ctx, name)
+            (found if pid else missing).append(pid or name)
+        return found, missing
+
+    send_ids, send_missing = resolve(parts[0])
+    recv_ids, recv_missing = resolve(parts[1])
+    missing = send_missing + recv_missing
+    if missing:
+        await _send(
+            update,
+            "⚠️ Couldn't find: " + digest.esc(", ".join(missing))
+            + "\nTry the player's full name.",
+        )
+        return
+    if not send_ids or not recv_ids:
+        await _send(update, "⚠️ Name at least one player on each side.")
+        return
+
+    r = valuation.evaluate_trade(ctx, send_ids, recv_ids)
+    lines = [
+        "⚖️ <b>Trade check</b>",
+        f"\n<b>You send</b> (total {r['send_value']}):",
+    ]
+    lines += [f"• {digest.esc(x)}" for x in r["send"]]
+    lines.append(f"\n<b>You get</b> (total {r['receive_value']}):")
+    lines += [f"• {digest.esc(x)}" for x in r["receive"]]
+    lines.append(
+        f"\n<b>{digest.esc(r['verdict'])}</b>\n"
+        f"<i>Value gap: {r['gap_pct']:+.1f}% toward "
+        f"{'you' if r['gap_pct'] >= 0 else 'them'}</i>"
+    )
+    lines.append(
+        "\n<i>Value is points above a replacement-level waiver add in your "
+        "league's scoring and starters — comparable across positions. This is "
+        "the raw price only; ask me about the trade for the live injury, role "
+        "and expert read on top.</i>"
+    )
+    await _send(update, "\n".join(lines))
 
 
 @authorized_only
@@ -488,6 +439,23 @@ async def cmd_diag(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             f"({len(ctx.week_projections)} this week, "
             f"{len(ctx.season_projections)} season)"
         )
+        levels = valuation.replacement_levels(ctx)
+        lines.append(
+            f"Valuation: {yn(ctx.player_values)} ({len(ctx.player_values)} "
+            "players priced)"
+        )
+        if levels:
+            lines.append(
+                "  <i>replacement level: "
+                + digest.esc(", ".join(f"{k} {v:.0f}pts" for k, v in sorted(levels.items())))
+                + "</i>"
+            )
+        if not ctx.has_projections:
+            lines.append(
+                "  <i>⚠️ No projections — values fall back to a curve fitted "
+                "to market rank. Ordering stays sane; point totals are "
+                "approximate.</i>"
+            )
     except Exception as exc:
         lines.append(f"\n❌ League load failed: <code>{digest.esc(exc)}</code>")
     await _send(update, "\n".join(lines))
@@ -669,6 +637,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("player", cmd_player))
     app.add_handler(CommandHandler("deep", cmd_deep))
     app.add_handler(CommandHandler("trade", cmd_trade))
+    app.add_handler(CommandHandler("tradecheck", cmd_tradecheck))
     app.add_handler(CommandHandler("reset", cmd_reset))
     app.add_handler(CommandHandler("diag", cmd_diag))
     app.add_handler(CommandHandler("startsit", cmd_startsit))

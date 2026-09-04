@@ -38,6 +38,8 @@ trades / lineup optimization auto-upgrade to the flagship model.
 | `/trending` | Most-added players across Sleeper right now |
 | `/player <name>` | Outlook + availability in your league + FAAB bid |
 | `/startsit` | Optimal lineup + start/sit calls for the week |
+| `/trade [focus]` | Find the best trade: fair deal, opening offer, how to pitch |
+| `/tradecheck A for B` | Price a specific offer instantly — no model, just the math |
 | `/deep <question>` | Force the flagship model for a big call |
 | `/gameday` | Quick injury sweep of your starters |
 | `/reset` | Clear conversation memory |
@@ -81,17 +83,30 @@ scheduled digests. No Railway Cron needed; the scheduler is internal.
   starters (including flex demand on RB/WR/TE).
 - **Drops** are scored from injury status, league-wide drop velocity, and how
   buried a player is on your depth chart.
-- **Player value** — used for trades, start/sit and waiver calls — is built in
-  two layers. The Sleeper layer comes first and is the baseline: each player's
-  consensus market rank, projected points converted to *your* league's scoring,
-  and the round your league actually drafted them in. Every roster line and the
-  league-wide **value board** carry those numbers, so both sides of a trade are
-  priced before anything is proposed. The X layer then adjusts that baseline —
-  current expert rankings plus recent discussion from the analysts in
-  `X_TRUSTED_HANDLES` can move a player off his price for a role change,
-  injury, or depth-chart shift, but the model has to say what moved him. A
-  lopsided swap can't be recommended without explicitly arguing the market is
-  wrong.
+- **Player value** is the number everything else hangs off, and it's computed,
+  not remembered. Raw projected points can't be compared across positions — a
+  QB outscores every running back and is still the cheapest starter to replace,
+  because QB13 is nearly as good as QB5. So each player is priced by **value
+  over replacement**: projected points in *your* scoring, minus the points of
+  the freely-available player who'd take that slot. The replacement line is
+  derived from your league's real settings — team count, starters per position,
+  and how flex slots split across eligible positions — and lands where fantasy
+  convention says it should (in a 12-team, 2RB/3WR/1TE/1FLEX league: RB35,
+  WR47, TE15, QB14). The result is normalized to **0-100 and comparable across
+  positions**: a QB and a RB with the same score are worth the same in a trade,
+  and 0 means freely replaceable off waivers. Injuries discount the score;
+  designations from Questionable to IR scale it down.
+- **Roster fit** decides who's actually available to trade. Every player on your
+  team is tiered CORE / STARTER / DEPTH / EXPENDABLE by ranking him within his
+  position against how many that slot really starts. Offers get built from
+  DEPTH and EXPENDABLE; sending a CORE player requires showing the math.
+- **The two-layer process** runs on every question, not just trades. The Sleeper
+  layer is the baseline — value score, market rank, projections, and the round
+  your league actually paid. The X layer adjusts it: current expert rankings
+  plus recent discussion from the analysts in `X_TRUSTED_HANDLES` can move a
+  player off his price for a role change, injury, or depth-chart shift, but the
+  model has to name what moved him. Contradicting the value score is allowed —
+  silently ignoring it isn't.
 
 ## Notes & limitations
 
@@ -100,8 +115,13 @@ scheduled digests. No Railway Cron needed; the scheduler is internal.
   falls back to market rank, draft capital, add/drop velocity, injuries and
   depth without breaking. `/diag` reports whether projections, market ranks and
   draft picks actually loaded. Everything carries a plain-English reason.
+- If projections go missing, valuation falls back to a decay curve fitted to
+  market rank. Tested both ways: the fallback reproduces the same replacement
+  ranks and nearly identical scores, so ordering and trade verdicts hold — only
+  the point totals become approximate. `/diag` says which mode you're in.
 - Without `XAI_API_KEY`, the bot runs fully on Sleeper data; only the live
   X/news buzz (`/player` and the buzz block in digests) is disabled.
+  `/tradecheck` needs no model at all — it's pure math.
 - The bot only talks to the single `TELEGRAM_CHAT_ID` you configure.
 
 ## Project layout
@@ -112,6 +132,8 @@ bot/
   config.py          env vars, schedule, timezone
   sleeper.py         Sleeper API client + player cache
   analysis.py        league context, needs, FAAB bids, drops
+  valuation.py       value over replacement, roster tiers, trade math
+  prompting.py       question classification + the analysis directives
   grok.py            xAI Grok Live Search over X + news
   digest.py          pre/post-waiver + gameday digest builders
   telegram_bot.py    command handlers + scheduled jobs
