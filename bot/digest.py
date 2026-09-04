@@ -137,20 +137,15 @@ async def _faab_block(ctx: analysis.LeagueContext, client: SleeperClient) -> str
             f"{star} <b>{esc(player_name(p))}</b> ({esc(_pos_tag(p))}) — {price}\n"
             f"   <i>{esc(r['reason'])}</i>"
         )
+        verdict = r.get("verdict") or ""
         drop_pid = r.get("drop_player_id")
         if drop_pid:
-            dropped = ctx.players.get(drop_pid) or {}
-            if r.get("beats_drop"):
-                line += (
-                    f"\n   ↳ <i>drop {esc(player_name(dropped))} "
-                    f"({r['drop_value']}) for him ({r['add_value']})</i>"
-                )
-            else:
-                line += (
-                    f"\n   ↳ <i>SKIP — worse than {esc(player_name(dropped))} "
-                    f"({r['add_value']} vs {r['drop_value']}), your own worst "
-                    "rosterable player</i>"
-                )
+            verdict = verdict.replace(
+                "{drop}", player_name(ctx.players.get(drop_pid) or {})
+            )
+        if verdict:
+            mark = "↳" if r.get("beats_drop") else "↳ SKIP —"
+            line += f"\n   {mark} <i>{esc(verdict)}</i>"
         lines.append(line)
     return "\n".join(lines) + "\n"
 

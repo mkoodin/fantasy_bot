@@ -132,6 +132,14 @@ scheduled digests. No Railway Cron needed; the scheduler is internal.
   explicitly — and when the best free agent is worse than your own worst bench
   player, it says SKIP and tells you to stand pat rather than manufacturing a
   target.
+- **Below the waiver line, value stops being the argument.** VORP floors every
+  replaceable player at zero, so "0.0 vs 0.0" answers nothing — and that's the
+  most common waiver case there is. There the decision is made on fit: whether
+  he's the handcuff to a back you depend on (or to someone else's stud),
+  whether he's young with room for the role to grow, whether you carry any
+  spare at that position, and whether the man he'd replace is doing anything at
+  all. A flier with a real role case beats a hot name with none; if neither has
+  one, it says so.
 - **League rules** constrain the advice. The trade deadline, IR slots and what's
   IR-eligible, how long dropped players sit on waivers, and the veto threshold
   all reach the model, so it won't propose a trade after the deadline or tell

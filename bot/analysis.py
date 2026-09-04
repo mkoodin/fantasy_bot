@@ -1023,7 +1023,36 @@ def suggest_faab_bid(ctx: LeagueContext, candidate: dict, max_adds: int) -> dict
     drop = valuation.worst_rosterable(ctx)
     drop_pid, drop_value = drop if drop else (None, 0.0)
     add_value = (ctx.player_values.get(pid) or {}).get("base_score", 0.0)
-    beats_drop = drop_pid is not None and add_value > drop_value
+
+    # Below the waiver line every player scores 0, so comparing those scores
+    # is a non-comparison — "worse than X (0.0 vs 0.0)" says nothing. When both
+    # sides are replacement-level the decision is about role and upside instead:
+    # is he a handcuff, is he young with a path, am I thin at the position, and
+    # is the man he'd replace doing anything at all?
+    add_flags = valuation.upside_flags(ctx, pid)
+    drop_flags = valuation.dead_weight_flags(ctx, drop_pid) if drop_pid else []
+    both_replacement = add_value <= 0 and drop_value <= 0
+
+    if drop_pid is None:
+        beats_drop, verdict = False, "no droppable player — an add costs you a starter"
+    elif add_value > drop_value + 3:
+        beats_drop = True
+        verdict = f"clear upgrade on {{drop}} ({add_value} vs {drop_value})"
+    elif both_replacement and add_flags:
+        # Neither is worth points today, but one of them has a reason to exist.
+        beats_drop = True
+        verdict = "lottery ticket worth the bench spot — " + "; ".join(add_flags[:2])
+        if drop_flags:
+            verdict += f" · {{drop}} is dead weight: {drop_flags[0]}"
+    elif both_replacement:
+        beats_drop = False
+        verdict = (
+            "no edge either way — both are replacement-level with no role or "
+            "upside case; stand pat"
+        )
+    else:
+        beats_drop = False
+        verdict = f"worse than {{drop}} ({add_value} vs {drop_value}) — skip"
 
     reason_bits: list[str] = []
     if upgrade > 0:
@@ -1050,6 +1079,9 @@ def suggest_faab_bid(ctx: LeagueContext, candidate: dict, max_adds: int) -> dict
         "drop_player_id": drop_pid,
         "drop_value": drop_value,
         "beats_drop": beats_drop,
+        "verdict": verdict,
+        "add_flags": add_flags,
+        "drop_flags": drop_flags,
         "rivals": rivals,
         "reason": "; ".join(reason_bits),
     }
@@ -1071,7 +1103,14 @@ async def faab_recommendations(
     # Lead with what actually improves the lineup. A hot name who is worse
     # than the player you'd cut for him is not a waiver target, so he sorts
     # last and carries the comparison that says why.
-    recs.sort(key=lambda r: (r["upgrade"], r["beats_drop"], r["adds"]), reverse=True)
+    # Clamp upgrade at zero before sorting: below the waiver line the number is
+    # a meaningless negative that differs by position, which would otherwise
+    # rank a no-hope receiver above a genuine handcuff. Once tied at zero, the
+    # verdict decides.
+    recs.sort(
+        key=lambda r: (max(r["upgrade"], 0.0), r["beats_drop"], r["adds"]),
+        reverse=True,
+    )
     return recs[:limit]
 
 

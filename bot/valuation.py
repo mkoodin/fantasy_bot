@@ -567,9 +567,15 @@ def worst_rosterable(ctx: Any) -> Optional[tuple[str, float]]:
     roster — not the abstract replacement level. Returns None when there is
     nobody droppable, which means any add costs you a real player.
     """
+    lineup, _ = optimal_lineup(ctx)
+    starting = {e["player_id"] for e in lineup if e.get("player_id")}
     candidates = []
     for pid in ctx.my_roster.get("players") or []:
         if pid in set(ctx.my_roster.get("reserve") or []):
+            continue
+        if pid in starting:
+            # Includes the K and DEF this league requires: they carry no value
+            # score, so without this they look like free real estate.
             continue
         tier = ctx.roster_tiers.get(pid)
         if tier in ("CORE", "STARTER"):
@@ -611,3 +617,128 @@ def competing_teams(ctx: Any, position: str, candidate_value: float) -> list[str
         if candidate_value > theirs:
             out.append(ctx.team_name(r.get("owner_id", "")))
     return out
+
+
+# --- Why a replacement-level player might still be worth a spot -------------
+# Value over replacement is the right tool for comparing starters and pricing
+# trades, but it deliberately floors everyone below the waiver line at zero.
+# That makes it useless for the most common waiver question there is: both
+# players score 0, so which one do I actually want on my bench? That question
+# is not about current points at all — it is about role, upside and what the
+# roster already has.
+
+
+def upside_flags(ctx: Any, pid: str) -> list[str]:
+    """Reasons a below-replacement free agent may still deserve a roster spot."""
+    p = ctx.players.get(pid) or {}
+    pos, team = p.get("position"), p.get("team")
+    flags: list[str] = []
+
+    # The classic lottery ticket: the backup to a back you are relying on.
+    # If your starter goes down, his handcuff inherits a starting job outright.
+    if pos in ("RB", "WR", "TE"):
+        for mine in ctx.my_roster.get("players") or []:
+            if mine == pid:
+                continue
+            mp = ctx.players.get(mine) or {}
+            if mp.get("team") != team or mp.get("position") != pos:
+                continue
+            if ctx.roster_tiers.get(mine) in ("CORE", "STARTER"):
+                flags.append(f"handcuff to your {player_name(mp)}")
+                break
+
+    # The same backup on someone else's stud is insurance you can hold against
+    # them, and it costs a bench spot rather than a bid.
+    if not flags and pos == "RB":
+        for r in ctx.rosters:
+            if r.get("owner_id") == ctx.my_user_id:
+                continue
+            for their in r.get("players") or []:
+                tp = ctx.players.get(their) or {}
+                if tp.get("team") != team or tp.get("position") != pos:
+                    continue
+                if (ctx.player_values.get(their) or {}).get("base_score", 0.0) >= 55:
+                    flags.append(f"handcuff to {player_name(tp)} ({ctx.team_name(r.get('owner_id',''))})")
+                    break
+            if flags:
+                break
+
+    exp = p.get("years_exp")
+    if isinstance(exp, int) and exp <= 1:
+        flags.append("rookie/2nd-year — role can still grow")
+
+    # A position you are genuinely thin at is worth a flier; one you are deep
+    # at is not, however appealing the player.
+    if pos in VALUED_POSITIONS:
+        depth = starter_depth(ctx).get(pos, 1)
+        owned = sum(
+            1
+            for x in (ctx.my_roster.get("players") or [])
+            if (ctx.players.get(x) or {}).get("position") == pos
+        )
+        if owned <= depth:
+            flags.append(f"you carry no spare {pos}")
+
+    week = ctx.week_projections.get(pid)
+    if week is not None and week >= 8:
+        flags.append(f"already projected {week} this week")
+    return flags
+
+
+def dead_weight_flags(ctx: Any, pid: str) -> list[str]:
+    """Reasons a player you roster may be holding a spot for nothing."""
+    p = ctx.players.get(pid) or {}
+    pos = p.get("position")
+    flags: list[str] = []
+
+    if pos in ("K", "DEF"):
+        same = [
+            x
+            for x in (ctx.my_roster.get("players") or [])
+            if (ctx.players.get(x) or {}).get("position") == pos
+        ]
+        if len(same) > 1:
+            flags.append(f"you roster {len(same)} {pos}s and start one")
+
+    season = ctx.season_projections.get(pid)
+    if season is not None and season <= 20:
+        flags.append(f"projected just {season} points all season")
+
+    if p.get("injury_status") and not is_out_eligible(ctx, pid):
+        flags.append(f"{p['injury_status']} with no IR slot to hide him")
+
+    if pos in VALUED_POSITIONS:
+        ranked = sorted(
+            (
+                ((ctx.player_values.get(x) or {}).get("base_score", 0.0), x)
+                for x in (ctx.my_roster.get("players") or [])
+                if (ctx.players.get(x) or {}).get("position") == pos
+            ),
+            reverse=True,
+        )
+        spot = next((i for i, (_, x) in enumerate(ranked, 1) if x == pid), None)
+        depth = starter_depth(ctx).get(pos, 1)
+        if spot and spot > depth + 1:
+            flags.append(f"your #{spot} {pos} behind {depth} starters")
+    return flags
+
+
+def is_out_eligible(ctx: Any, pid: str) -> bool:
+    """True if this player could be stashed on IR rather than cut."""
+    st = ctx.league.get("settings") or {}
+    if not st.get("reserve_slots"):
+        return False
+    if len(ctx.my_roster.get("reserve") or []) >= int(st["reserve_slots"]):
+        return False
+    status = (ctx.players.get(pid) or {}).get("injury_status") or ""
+    allowed = {"IR"}
+    for key, label in (
+        ("reserve_allow_out", "Out"),
+        ("reserve_allow_doubtful", "Doubtful"),
+        ("reserve_allow_sus", "Sus"),
+        ("reserve_allow_na", "NA"),
+        ("reserve_allow_dnr", "DNR"),
+    ):
+        if st.get(key):
+            allowed.add(label)
+    return status in allowed

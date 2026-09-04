@@ -166,7 +166,14 @@ WAIVER_DIRECTIVE = (
     "free agent is worse than my own worst bench player, the correct answer "
     "is to stand pat, and say that plainly instead of manufacturing a target. "
     "Never suggest dropping a CORE player, a starter in this week's lineup, "
-    "or an injured starter worth stashing on IR.]"
+    "or an injured starter worth stashing on IR. "
+    "When every option is replacement-level — which is normal — do NOT argue "
+    "from the value scores, because below the waiver line they are all zero "
+    "and comparing them says nothing. Argue from fit instead: is he the "
+    "handcuff to a back I depend on, is he young with a path to work, am I "
+    "thin at that position, is my own bench player doing anything at all. "
+    "A flier with a real role case beats a hot name with none, and if neither "
+    "has one, say so and tell me to stand pat.]"
 )
 
 
