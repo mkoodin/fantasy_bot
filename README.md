@@ -35,6 +35,10 @@ trades / lineup optimization auto-upgrade to the flagship model.
 | `/drops` | Droppable players on your roster |
 | `/roster` | Your team by position (injuries flagged) |
 | `/needs` | Where your roster is thin |
+| `/usage` | Whose role grew or shrank, and where points lag the role |
+| `/stash` | Who is one injury away from starter value |
+| `/bench` | Why do I own each bench player |
+| `/plan` | The next 2-4 weeks: byes, thin spots, what to buy early |
 | `/news` | Scan X + news now for anything actionable on your wire |
 | `/trending` | Most-added players across Sleeper right now |
 | `/player <name>` | Outlook + availability in your league + FAAB bid |
@@ -45,20 +49,28 @@ trades / lineup optimization auto-upgrade to the flagship model.
 | `/gameday` | Quick injury sweep of your starters |
 | `/reset` | Clear conversation memory |
 
-Scheduled automatically (all ET, configurable): **pre-waiver** Mon 7pm,
-**post-waiver** Wed 6am, **start/sit** Fri 6:45pm, **last-minute start/sit**
-Sun 11:15am, plus two watches on your wire:
+Scheduled automatically (all ET, each individually configurable). The times are
+chosen around when the decision is actually made, not around convenience:
 
-- **Breaking-news watch** (every 3h, `NEWS_WATCH_*`) — reads X and the news
-  directly for injuries, inactives, snap-count and depth-chart changes, and
-  speaks *only* when the beneficiary is actually a free agent in your league:
-  who got hurt, who inherits the work, whether he's a free add or a waiver
-  claim, and how long you have. This is the leading signal — the point is to
-  act before your leaguemates see it. It stays silent when there's nothing,
-  and never repeats an alert it has already sent.
-- **Free-agent watch** (every 4h, Sleeper-only so it's free) — fires once a
-  player is already being added league-wide. A lagging confirmation, useful as
-  a backstop but never first.
+| When | Brief | Why then |
+|---|---|---|
+| **Sun 9:30pm** | Get there first | Roles changed today; the top Tuesday claim is often still free tonight |
+| **Mon 10am** | What changed | Usage postmortem before the articles set the market |
+| **Tue 7pm** | Waiver claims & FAAB | After Monday night, before Wednesday 3am processing — the real deadline |
+| **Wed 6am** | Post-waiver | Who went unclaimed, and what rivals dropped |
+| **Thu 4pm** | Tonight's lock | TNF starters, and keeping FLEX free for Sunday |
+| **Fri 6:45pm** | Start/sit | Practice reports in, lineup takes shape |
+| **Sat 11am** | Bench audit | Every spot justified; free options on questionable starters |
+| **Sun 11:15am** | Inactives | Final sweep before kickoff |
+
+Plus two watches: a **breaking-news watch** every 3h that reads X and the news
+directly and only speaks when the beneficiary is free in your league, and a
+free-agent watch every 4h on add volume (Sleeper-only, so free).
+
+> The old Monday 7pm pre-waiver digest is **off by default**: it fired before
+> Monday Night Football, so it priced claims on an incomplete week. The Tuesday
+> brief does that job at the point the decision is actually made. Set
+> `PRE_DIGEST_ENABLED=true` to restore it.
 
 ## Setup
 
@@ -190,6 +202,13 @@ Monday answer should not read like a Sunday answer.
   all reach the model, so it won't propose a trade after the deadline or tell
   you to cut a player you could stash on IR for free. Drop rankings skip
   IR-eligible injuries outright while a slot is open.
+- **Usage, not points.** Sleeper's stats feed carries the participation data —
+  offensive snaps, targets, carries, red-zone looks — so snap share, target
+  share and carry share are computed for the last few weeks along with their
+  *direction*. Two boards fall out: **usage rising** (a player whose snaps
+  jumped while his points stayed quiet is the buy window, still cheap because
+  the box score hasn't told the league yet) and **usage falling** on your own
+  roster (sell or bench before the production follows the snaps down).
 - **Every player carries three valuations**, because they answer different
   questions: what he's worth *this week*, his *rest-of-season* value, and his
   *ceiling* if the situation breaks his way. A backup back behind a workhorse

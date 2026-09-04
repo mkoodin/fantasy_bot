@@ -65,6 +65,8 @@ class LeagueContext:
     roster_tiers: dict[str, str] = field(default_factory=dict)
     # week number -> set of player_ids with no game that week (byes ahead).
     upcoming_byes: dict[int, set] = field(default_factory=dict)
+    # player_id -> usage metrics for the most recent weeks played.
+    usage: dict[str, dict] = field(default_factory=dict)
 
     @property
     def has_projections(self) -> bool:
@@ -209,6 +211,10 @@ async def build_context(client: SleeperClient, force: bool = False) -> LeagueCon
         ctx.upcoming_byes = await load_upcoming_byes(ctx, client)
     except Exception:
         ctx.upcoming_byes = {}
+    try:
+        ctx.usage = await load_usage(ctx, client)
+    except Exception:
+        ctx.usage = {}
 
     _cache["ctx"] = ctx
     _cache["ts"] = now
@@ -398,6 +404,106 @@ async def load_draft_picks(ctx: "LeagueContext", client: SleeperClient) -> dict[
     return out
 
 
+# Sleeper's stat rows use short keys. Only the participation ones matter here:
+# what a player was GIVEN, which predicts, rather than what he did with it,
+# which regresses.
+_USAGE_KEYS = {
+    "snaps": ("off_snp",),
+    "team_snaps": ("tm_off_snp",),
+    "targets": ("rec_tgt",),
+    "team_targets": ("tm_pass_att", "tm_att"),
+    "carries": ("rush_att",),
+    "team_carries": ("tm_rush_att",),
+    "rz_targets": ("rec_rz_tgt",),
+    "rz_carries": ("rush_rz_att",),
+    "air_yards": ("rec_air_yd",),
+}
+
+
+def _stat(row: dict, names: tuple) -> Optional[float]:
+    stats = row.get("stats") if isinstance(row.get("stats"), dict) else row
+    if not isinstance(stats, dict):
+        return None
+    for n in names:
+        v = stats.get(n)
+        if isinstance(v, (int, float)):
+            return float(v)
+    return None
+
+
+async def load_usage(
+    ctx: LeagueContext, client: SleeperClient, weeks_back: int = 3
+) -> dict[str, dict]:
+    """Recent participation for every player, plus its direction.
+
+    This is the Monday question in data form: not who scored, but whose role
+    grew. Snap share, target share, carry share and red-zone work are what move
+    first — usually a week or two before the fantasy points follow, which is
+    the window worth acting in. The trend across weeks matters more than any
+    single week's level.
+    """
+    if is_offseason(ctx) or ctx.week < 2:
+        return {}
+
+    weeks = [w for w in range(max(1, ctx.week - weeks_back), ctx.week) if w > 0]
+    per_week: dict[int, dict[str, dict]] = {}
+    for wk in weeks:
+        try:
+            rows = await client.get_stats(ctx.season, wk)
+        except Exception:
+            continue
+        if not rows:
+            continue
+        parsed: dict[str, dict] = {}
+        for row in rows:
+            pid = row.get("player_id")
+            if not pid:
+                continue
+            vals = {k: _stat(row, names) for k, names in _USAGE_KEYS.items()}
+            if vals.get("snaps") is None and vals.get("targets") is None:
+                continue
+            parsed[str(pid)] = vals
+        if parsed:
+            per_week[wk] = parsed
+    if not per_week:
+        return {}
+
+    def share(vals: dict, num: str, den: str) -> Optional[float]:
+        n, d = vals.get(num), vals.get(den)
+        if n is None or not d:
+            return None
+        return round(100.0 * n / d, 1)
+
+    out: dict[str, dict] = {}
+    ordered = sorted(per_week)
+    for pid in {p for wk in per_week.values() for p in wk}:
+        series = [(wk, per_week[wk][pid]) for wk in ordered if pid in per_week[wk]]
+        if not series:
+            continue
+        latest = series[-1][1]
+        entry = {
+            "snap_pct": share(latest, "snaps", "team_snaps"),
+            "target_pct": share(latest, "targets", "team_targets"),
+            "carry_pct": share(latest, "carries", "team_carries"),
+            "targets": latest.get("targets"),
+            "carries": latest.get("carries"),
+            "rz": (latest.get("rz_targets") or 0) + (latest.get("rz_carries") or 0),
+            "air_yards": latest.get("air_yards"),
+            "weeks": len(series),
+        }
+        # Direction, which is the part that predicts. Compared on snap share
+        # where available, since it is the broadest measure of playing time.
+        if len(series) >= 2:
+            first = share(series[0][1], "snaps", "team_snaps")
+            last = entry["snap_pct"]
+            if first is not None and last is not None:
+                delta = last - first
+                entry["snap_delta"] = round(delta, 1)
+                entry["trend"] = "rising" if delta >= 8 else "falling" if delta <= -8 else "stable"
+        out[pid] = entry
+    return out
+
+
 async def load_upcoming_byes(
     ctx: LeagueContext, client: SleeperClient, weeks_ahead: int = 3
 ) -> dict[int, set]:
@@ -487,6 +593,21 @@ def value_tag(ctx: "LeagueContext", pid: str) -> str:
     week = ctx.week_projections.get(pid)
     if week is not None:
         bits.append(f"{week} this wk")
+    u = ctx.usage.get(pid)
+    if u:
+        parts = []
+        if u.get("snap_pct") is not None:
+            parts.append(f"{u['snap_pct']}% snaps")
+        if u.get("target_pct") is not None:
+            parts.append(f"{u['target_pct']}% tgt share")
+        if u.get("carry_pct") is not None:
+            parts.append(f"{u['carry_pct']}% carries")
+        if u.get("rz"):
+            parts.append(f"{int(u['rz'])} RZ")
+        if u.get("trend") and u["trend"] != "stable":
+            parts.append(f"snaps {u['trend']} {u.get('snap_delta', 0):+}pts")
+        if parts:
+            bits.append("usage: " + ", ".join(parts))
     dc = valuation.depth_chart(ctx, pid)
     if dc:
         bits.append(f"depth chart #{dc[0]} at {dc[1]}")
@@ -766,6 +887,89 @@ def scoring_context(ctx: LeagueContext) -> str:
     )
 
 
+def usage_movers_context(ctx: LeagueContext, limit: int = 12) -> str:
+    """Players whose role is growing, ranked by how much — and who owns them.
+
+    The single most actionable board in the whole context. Usage moves a week
+    or two before production, so a player whose snap share jumped while his
+    points stayed boring is the buy window: still cheap, because the box score
+    has not told anyone yet.
+    """
+    if not ctx.usage:
+        return ""
+    rows = []
+    for pid, u in ctx.usage.items():
+        delta = u.get("snap_delta")
+        if delta is None or delta < 8:
+            continue
+        p = ctx.players.get(pid) or {}
+        if (p.get("position") or "") not in valuation.VALUED_POSITIONS:
+            continue
+        owner = "FREE AGENT"
+        for r in ctx.rosters:
+            if pid in (r.get("players") or []):
+                owner = ctx.team_name(r.get("owner_id", ""))
+                if r.get("owner_id") == ctx.my_user_id:
+                    owner += " (YOU)"
+                break
+        rows.append((delta, pid, owner, u, p))
+    if not rows:
+        return ""
+    rows.sort(reverse=True)
+
+    lines = [
+        "USAGE RISING — players whose snap share grew over the last few weeks, "
+        "steepest first. Usage moves BEFORE production, so anyone here who is "
+        "still a free agent, or whose fantasy points have not caught up yet, is "
+        "the buy window: cheap now precisely because the box score has not told "
+        "the league yet. Check whether the points lag the role before deciding:"
+    ]
+    for delta, pid, owner, u, p in rows[:limit]:
+        bits = [f"snaps {u['snap_pct']}% ({delta:+})"]
+        if u.get("target_pct") is not None:
+            bits.append(f"{u['target_pct']}% tgt")
+        if u.get("carry_pct") is not None:
+            bits.append(f"{u['carry_pct']}% car")
+        if u.get("rz"):
+            bits.append(f"{int(u['rz'])} RZ")
+        week = ctx.week_projections.get(pid)
+        if week is not None:
+            bits.append(f"proj {week} this wk")
+        lines.append(
+            f"  {player_name(p)} ({p.get('position','?')}-{p.get('team','FA')}) "
+            f"[{', '.join(bits)}] — {owner}"
+        )
+    return "\n".join(lines)
+
+
+def usage_faders_context(ctx: LeagueContext, limit: int = 8) -> str:
+    """Players on YOUR roster whose role is shrinking — sell or bench early."""
+    if not ctx.usage:
+        return ""
+    rows = []
+    for pid in ctx.my_roster.get("players") or []:
+        u = ctx.usage.get(pid) or {}
+        delta = u.get("snap_delta")
+        if delta is None or delta > -8:
+            continue
+        rows.append((delta, pid, u))
+    if not rows:
+        return ""
+    rows.sort()
+    lines = [
+        "USAGE FALLING on YOUR roster — the role is shrinking, which shows up "
+        "in the box score later. Treat these as sell-high or bench candidates "
+        "before the production follows the snaps down:"
+    ]
+    for delta, pid, u in rows[:limit]:
+        p = ctx.players.get(pid) or {}
+        lines.append(
+            f"  {player_name(p)} ({p.get('position','?')}) — snaps "
+            f"{u['snap_pct']}% ({delta:+} over {u['weeks']} wks)"
+        )
+    return "\n".join(lines)
+
+
 def bye_outlook_context(ctx: LeagueContext) -> str:
     """Who disappears in the coming weeks, and whether that breaks the lineup."""
     if not ctx.upcoming_byes:
@@ -879,6 +1083,8 @@ async def full_league_context(ctx: LeagueContext, client: SleeperClient) -> str:
         league_rules_context(ctx),
         valuation.lineup_context(ctx),
         bye_outlook_context(ctx),
+        usage_movers_context(ctx),
+        usage_faders_context(ctx),
         league_rosters_context(ctx),
         value_board_context(ctx),
         valuation.trade_posture_context(ctx),

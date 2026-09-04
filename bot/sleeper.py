@@ -99,6 +99,19 @@ class SleeperClient:
         """Every pick in a draft: round, pick_no, roster_id, player_id, metadata."""
         return await self._get(f"/draft/{draft_id}/picks")
 
+    # --- Actual stats (undocumented, best-effort) ---------------------------
+    async def get_stats(
+        self, season: str, week: Optional[int] = None, max_age: int = 1_800
+    ) -> list[dict]:
+        """Real box-score and usage stats. Week None = season totals.
+
+        Same undocumented endpoint family as projections, and treated the same
+        way: any failure returns [] and callers carry on. This is where the
+        participation data lives — offensive snaps, targets, carries, red-zone
+        looks — which is what actually predicts next week.
+        """
+        return await self._stat_feed("stats", season, week, max_age)
+
     # --- Projections (undocumented, best-effort) -----------------------------
     async def get_projections(
         self,
@@ -112,14 +125,20 @@ class SleeperClient:
         bonus signal: any failure returns [] and the caller carries on without
         projections rather than breaking the whole answer.
         """
-        key = (str(season), week)
+        return await self._stat_feed("projections", season, week, max_age)
+
+    async def _stat_feed(
+        self, kind: str, season: str, week: Optional[int], max_age: int
+    ) -> list[dict]:
+        """Shared fetch for the projections and stats feeds."""
+        key = (kind, str(season), week)
         now = time.time()
         cached = self._projections.get(key)
         if cached is not None and now - self._projections_ts.get(key, 0.0) < max_age:
             return cached
 
         positions = "".join(f"&position[]={p}" for p in sorted(FANTASY_POSITIONS))
-        path = f"/projections/nfl/{season}"
+        path = f"/{kind}/nfl/{season}"
         if week is not None:
             path += f"/{week}"
         query = f"?season_type=regular&order_by=ppr{positions}"

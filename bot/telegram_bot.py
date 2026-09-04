@@ -38,6 +38,10 @@ HELP_TEXT = (
     "<b>/drops</b> — droppable players on your roster\n"
     "<b>/roster</b> — your team, grouped by position (injuries flagged)\n"
     "<b>/needs</b> — where your roster is thin\n"
+    "<b>/usage</b> — whose role grew or shrank, and where points lag the role\n"
+    "<b>/stash</b> — who is one injury away from starter value\n"
+    "<b>/bench</b> — why do I own each bench player\n"
+    "<b>/plan</b> — the next 2-4 weeks: byes, thin spots, buy early\n"
     "<b>/news</b> — scan X + news now for anything actionable on your wire\n"
     "<b>/trending</b> — most-added players across Sleeper right now\n"
     "<b>/player &lt;name&gt;</b> — outlook + availability + FAAB bid for any player\n"
@@ -400,6 +404,49 @@ async def cmd_tradecheck(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 @authorized_only
+async def cmd_usage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """What changed in usage: /usage."""
+    await _answer(update, context,
+        "What changed in USAGE over the last couple of weeks — whose role grew "
+        "and whose shrank? Use the usage boards. Call out anyone whose snaps or "
+        "targets are climbing while their fantasy points lag, since that is the "
+        "buy window, and flag anyone on my roster losing work.", deep=False)
+
+
+@authorized_only
+async def cmd_stash(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """One-injury-away targets: /stash."""
+    await _answer(update, context,
+        "Which available players in my league are ONE INJURY AWAY from "
+        "immediate starter value? Use the contingent-value figures and the "
+        "depth charts. For each, name the starter ahead of him, how much of "
+        "that job he would inherit, and whether he is worth a bench spot now — "
+        "and tell me which of my own bench players to give up for him.",
+        deep=False)
+
+
+@authorized_only
+async def cmd_bench(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Bench audit: /bench."""
+    await _answer(update, context,
+        "Audit my bench. For every bench player, why exactly do I own him — "
+        "insurance for a specific starter, a rising role, a known streaming "
+        "week, or real upside? Any spot without a clear answer is being wasted: "
+        "name it and say what should replace it.", deep=False)
+
+
+@authorized_only
+async def cmd_plan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Two-to-four week outlook: /plan."""
+    await _answer(update, context,
+        "Look two to four weeks ahead, not just this week. Use the bye outlook "
+        "and my playoff weeks. Where does my roster break — byes stacking, a "
+        "position going thin, a streaming slot with no plan? What should I "
+        "acquire NOW while it is cheap rather than the week I need it?",
+        deep=True)
+
+
+@authorized_only
 async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Clear the conversation memory to start a fresh topic."""
     context.chat_data.pop("qa_history", None)
@@ -712,14 +759,130 @@ async def job_news_watch(context: ContextTypes.DEFAULT_TYPE) -> None:
     await _push(context, "📡 <b>Breaking — act on this</b>\n\n" + digest.esc(text))
 
 
+# --- The weekly briefs ------------------------------------------------------
+# Each is the same shape: assemble the full league context, ask the one
+# question that day's decision actually turns on, and push the answer. The
+# question differs because the job differs — Monday reads usage, Tuesday
+# prices claims, Saturday buys optionality.
+_BRIEFS = {
+    "usage": (
+        "📊 <b>Monday — what changed</b>",
+        "What changed in USAGE yesterday, not who scored. Using the USAGE "
+        "RISING and USAGE FALLING boards plus your search: whose role grew, "
+        "whose shrank, and which of those changes are structural rather than "
+        "game-script noise. Call out anyone whose snaps or targets climbed "
+        "while their fantasy points stayed quiet — those are the buy windows "
+        "before the league notices. Flag anything on MY roster that is losing "
+        "work. Then name the two or three players I should be targeting on "
+        "waivers, before the articles tell everyone.",
+    ),
+    "waiver": (
+        "🎯 <b>Tuesday — waiver claims &amp; FAAB</b>",
+        "Waivers process early tomorrow morning, so this is my last chance to "
+        "set claims. Give me the ranked list to claim, with a specific FAAB "
+        "bid for each and the exact player I drop for him. Use the waiver "
+        "board's upgrade figures, and use RIVAL INTEL to say who else is "
+        "likely to bid and roughly what it will take to beat them. Separate "
+        "genuine season-changers worth spending real budget from contingent "
+        "fliers worth a dollar. If nothing is worth a claim, say so plainly.",
+    ),
+    "tnf": (
+        "🌙 <b>Thursday — tonight's lock</b>",
+        "Thursday night kicks off shortly. Do I have anyone playing tonight, "
+        "and is starting them right? Remember that a Thursday player locks my "
+        "FLEX for the week, so prefer them in a fixed slot and keep FLEX free "
+        "to absorb a Sunday inactive. Then flag anyone questionable for Sunday "
+        "where I should be lining up insurance now rather than Sunday morning.",
+    ),
+    "bench": (
+        "🔍 <b>Saturday — bench audit</b>",
+        "Audit my bench. For every bench player, why exactly do I own him — "
+        "insurance for a specific starter, a rising role, a streamer for a "
+        "known week, or genuine upside? Any spot without an answer is wasted, "
+        "so name it and what should replace it. Then the free options: if a "
+        "starter anywhere is questionable for tomorrow and his backup is "
+        "available in my league, adding that backup costs only a disposable "
+        "spot and pays a starter if the inactive lands.",
+    ),
+    "scout": (
+        "🔭 <b>Sunday night — get there first</b>",
+        "Today's games just finished. Before anyone builds a waiver board: "
+        "which roles visibly changed today — injuries, a backup taking over, "
+        "a rookie's snaps jumping, a committee resolving? Who becomes the top "
+        "claim on Tuesday, and is he available right now? If I can add him "
+        "tonight for a disposable bench spot, I skip the bidding entirely. "
+        "Also flag anyone playing tomorrow night whose backup is worth a "
+        "speculative add.",
+    ),
+}
+
+
+async def _push_brief(context: ContextTypes.DEFAULT_TYPE, kind: str) -> None:
+    """Run one of the weekly briefs and push it."""
+    header, question = _BRIEFS[kind]
+    try:
+        ctx = await _ctx(force=True)
+        full_ctx = await analysis.full_league_context(ctx, client)
+        result = await grok.answer_question(question, full_ctx)
+        if not result:
+            return
+        text = (result.get("text") or "").strip()
+        if not text or text.startswith("⚠️"):
+            logger.warning("%s brief unusable: %s", kind, text[:120])
+            return
+        body = f"{header}\n<i>{digest.esc(ctx.league.get('name',''))} · Week {ctx.week}</i>\n\n"
+        await _push(context, body + digest.esc(text))
+    except Exception as exc:
+        logger.exception("%s brief failed", kind)
+        await _push(
+            context,
+            f"⚠️ {kind} brief failed: <code>{digest.esc(type(exc).__name__)}: "
+            f"{digest.esc(exc)}</code>",
+        )
+
+
+def _brief_job(kind: str, day_attr: str):
+    """Build a job that runs one brief on its configured weekday."""
+    async def job(context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not _is_day(getattr(config, day_attr)):
+            return
+        await _push_brief(context, kind)
+
+    job.__name__ = f"job_{kind}_brief"
+    return job
+
+
+job_usage_brief = _brief_job("usage", "USAGE_BRIEF_DAY")
+job_waiver_brief = _brief_job("waiver", "WAIVER_BRIEF_DAY")
+job_tnf_brief = _brief_job("tnf", "TNF_BRIEF_DAY")
+job_bench_brief = _brief_job("bench", "BENCH_BRIEF_DAY")
+job_scout_brief = _brief_job("scout", "SCOUT_BRIEF_DAY")
+
+
 def _register_jobs(app: Application) -> None:
     jq = app.job_queue
     # Each job runs daily at its time but guards on the target weekday, so we
     # never depend on any library's day-index convention.
-    jq.run_daily(job_pre, time=config.PRE_DIGEST_TIME, name="pre_waiver")
+    # Retired by default: it fired Monday evening, before Monday Night Football,
+    # so claims were priced on an incomplete week. The Tuesday waiver brief does
+    # the same job at the point the decision is actually made.
+    if config.PRE_DIGEST_ENABLED:
+        jq.run_daily(job_pre, time=config.PRE_DIGEST_TIME, name="pre_waiver")
     jq.run_daily(job_post, time=config.POST_DIGEST_TIME, name="post_waiver")
     jq.run_daily(job_startsit, time=config.STARTSIT_TIME, name="friday_startsit")
     jq.run_daily(job_gameday, time=config.GAMEDAY_TIME, name="sunday_final")
+    for kind, enabled, day, tm in (
+        ("usage", config.USAGE_BRIEF_ENABLED, config.USAGE_BRIEF_DAY, config.USAGE_BRIEF_TIME),
+        ("waiver", config.WAIVER_BRIEF_ENABLED, config.WAIVER_BRIEF_DAY, config.WAIVER_BRIEF_TIME),
+        ("tnf", config.TNF_BRIEF_ENABLED, config.TNF_BRIEF_DAY, config.TNF_BRIEF_TIME),
+        ("bench", config.BENCH_BRIEF_ENABLED, config.BENCH_BRIEF_DAY, config.BENCH_BRIEF_TIME),
+        ("scout", config.SCOUT_BRIEF_ENABLED, config.SCOUT_BRIEF_DAY, config.SCOUT_BRIEF_TIME),
+    ):
+        if enabled and config.ENABLE_GROK:
+            app.job_queue.run_daily(
+                globals()[f"job_{kind}_brief"], time=tm, name=f"{kind}_brief"
+            )
+
     if config.NEWS_WATCH_ENABLED and config.ENABLE_GROK:
         app.job_queue.run_repeating(
             job_news_watch,
@@ -801,6 +964,10 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("roster", cmd_roster))
     app.add_handler(CommandHandler("trending", cmd_trending))
     app.add_handler(CommandHandler("news", cmd_news))
+    app.add_handler(CommandHandler("plan", cmd_plan))
+    app.add_handler(CommandHandler("bench", cmd_bench))
+    app.add_handler(CommandHandler("stash", cmd_stash))
+    app.add_handler(CommandHandler("usage", cmd_usage))
     app.add_handler(CommandHandler("player", cmd_player))
     app.add_handler(CommandHandler("deep", cmd_deep))
     app.add_handler(CommandHandler("trade", cmd_trade))

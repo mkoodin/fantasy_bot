@@ -115,6 +115,37 @@ ENABLE_GROK = bool(XAI_API_KEY)
 # --- Scheduling -------------------------------------------------------------
 TIMEZONE = ZoneInfo(os.getenv("TIMEZONE", "America/New_York"))
 
+# --- The weekly operating rhythm -------------------------------------------
+# Each brief does a different job, timed to when the decision is actually made.
+# The waiver brief is the load-bearing one: claims process Wednesday 3am, and
+# Monday Night Football is not over until ~11:30pm Monday, so any bid set on
+# Monday evening is priced on incomplete information. Tuesday evening is the
+# real deadline. Each can be disabled individually.
+def _flag(name: str, default: str = "true") -> bool:
+    return os.getenv(name, default).lower() in ("1", "true", "yes", "on")
+
+
+# Monday morning: what changed in usage yesterday, before the articles land.
+USAGE_BRIEF_ENABLED = _flag("USAGE_BRIEF_ENABLED")
+USAGE_BRIEF_DAY = int(os.getenv("USAGE_BRIEF_DAY", "0"))        # Monday
+USAGE_BRIEF_TIME = None  # set below, after _parse_time exists
+
+# Tuesday evening: the waiver board and FAAB bids, after MNF, before processing.
+WAIVER_BRIEF_ENABLED = _flag("WAIVER_BRIEF_ENABLED")
+WAIVER_BRIEF_DAY = int(os.getenv("WAIVER_BRIEF_DAY", "1"))      # Tuesday
+
+# Thursday afternoon: TNF lineup lock and insurance.
+TNF_BRIEF_ENABLED = _flag("TNF_BRIEF_ENABLED")
+TNF_BRIEF_DAY = int(os.getenv("TNF_BRIEF_DAY", "3"))            # Thursday
+
+# Saturday: bench audit and the free options on questionable starters.
+BENCH_BRIEF_ENABLED = _flag("BENCH_BRIEF_ENABLED")
+BENCH_BRIEF_DAY = int(os.getenv("BENCH_BRIEF_DAY", "5"))        # Saturday
+
+# Sunday night: scout what changed today and grab it before Tuesday's claims.
+SCOUT_BRIEF_ENABLED = _flag("SCOUT_BRIEF_ENABLED")
+SCOUT_BRIEF_DAY = int(os.getenv("SCOUT_BRIEF_DAY", "6"))        # Sunday
+
 # Weekday indexes: Monday=0 ... Sunday=6 (matches datetime.weekday()).
 # Pre-waiver bid plan + FAAB recs (default Monday 7pm).
 PRE_DIGEST_DAY = int(os.getenv("PRE_DIGEST_DAY", "0"))       # Monday
@@ -157,6 +188,18 @@ NEWS_WATCH_LOOKBACK_HOURS = int(os.getenv("NEWS_WATCH_LOOKBACK_HOURS", "5"))
 # Quiet hours, same as the FA watch — no 4am pings.
 NEWS_WATCH_START_HOUR = int(os.getenv("NEWS_WATCH_START_HOUR", "7"))
 NEWS_WATCH_END_HOUR = int(os.getenv("NEWS_WATCH_END_HOUR", "23"))
+
+USAGE_BRIEF_TIME = _parse_time(os.getenv("USAGE_BRIEF_TIME", ""), "10:00")
+WAIVER_BRIEF_TIME = _parse_time(os.getenv("WAIVER_BRIEF_TIME", ""), "19:00")
+TNF_BRIEF_TIME = _parse_time(os.getenv("TNF_BRIEF_TIME", ""), "16:00")
+BENCH_BRIEF_TIME = _parse_time(os.getenv("BENCH_BRIEF_TIME", ""), "11:00")
+SCOUT_BRIEF_TIME = _parse_time(os.getenv("SCOUT_BRIEF_TIME", ""), "21:30")
+
+# The old Monday pre-waiver digest fired before Monday Night Football had
+# finished, pricing claims on incomplete information. Off by default now that
+# the Tuesday waiver brief covers the same job at the right time; set
+# PRE_DIGEST_ENABLED=true to bring it back.
+PRE_DIGEST_ENABLED = _flag("PRE_DIGEST_ENABLED", "false")
 
 # How long (seconds) to reuse cached league data across commands.
 CONTEXT_TTL = int(os.getenv("CONTEXT_TTL", "300"))
