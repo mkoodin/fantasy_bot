@@ -140,6 +140,24 @@ FA_WATCH_MIN_ADDS = int(os.getenv("FA_WATCH_MIN_ADDS", "4000"))
 FA_WATCH_START_HOUR = int(os.getenv("FA_WATCH_START_HOUR", "8"))
 FA_WATCH_END_HOUR = int(os.getenv("FA_WATCH_END_HOUR", "23"))
 
+# --- Breaking-news watch ----------------------------------------------------
+# The FA watch above is a LAGGING signal: it fires once a player is already
+# being added league-wide, by which point your leaguemates have seen the same
+# thing. This watch is the leading one — it reads X and the news directly for
+# injuries and role changes, and only speaks when the beneficiary is actually
+# available in your league. Costs a Grok call per run, so it's tunable.
+NEWS_WATCH_ENABLED = os.getenv("NEWS_WATCH_ENABLED", "true").lower() in (
+    "1", "true", "yes", "on"
+)
+# How often to scan. Tighter on game days is the point; 3h is a sane default.
+NEWS_WATCH_HOURS = float(os.getenv("NEWS_WATCH_HOURS", "3"))
+# How far back each scan looks. Slightly wider than the interval so nothing
+# falls through the gap between runs.
+NEWS_WATCH_LOOKBACK_HOURS = int(os.getenv("NEWS_WATCH_LOOKBACK_HOURS", "5"))
+# Quiet hours, same as the FA watch — no 4am pings.
+NEWS_WATCH_START_HOUR = int(os.getenv("NEWS_WATCH_START_HOUR", "7"))
+NEWS_WATCH_END_HOUR = int(os.getenv("NEWS_WATCH_END_HOUR", "23"))
+
 # How long (seconds) to reuse cached league data across commands.
 CONTEXT_TTL = int(os.getenv("CONTEXT_TTL", "300"))
 

@@ -10,6 +10,7 @@ import logging
 import re
 from datetime import datetime
 from functools import wraps
+from typing import Optional
 
 from telegram import Update
 from telegram.constants import ChatAction, ParseMode
@@ -37,6 +38,7 @@ HELP_TEXT = (
     "<b>/drops</b> — droppable players on your roster\n"
     "<b>/roster</b> — your team, grouped by position (injuries flagged)\n"
     "<b>/needs</b> — where your roster is thin\n"
+    "<b>/news</b> — scan X + news now for anything actionable on your wire\n"
     "<b>/trending</b> — most-added players across Sleeper right now\n"
     "<b>/player &lt;name&gt;</b> — outlook + availability + FAAB bid for any player\n"
     "<b>/startsit</b> — optimal lineup + start/sit calls for the week\n"
@@ -606,6 +608,90 @@ async def job_fa_watch(context: ContextTypes.DEFAULT_TYPE) -> None:
     await _push(context, "\n".join(lines))
 
 
+async def _run_news_scan(context: ContextTypes.DEFAULT_TYPE) -> Optional[str]:
+    """Shared body for the scheduled watch and the /news command."""
+    ctx = await _ctx(force=True)
+    full_ctx = await analysis.full_league_context(ctx, client)
+    result = await grok.breaking_news(
+        full_ctx, lookback_hours=config.NEWS_WATCH_LOOKBACK_HOURS
+    )
+    if not result:
+        return None
+    text = (result.get("text") or "").strip()
+    if not text or text.startswith("⚠️"):
+        return None
+    if "NOTHING ACTIONABLE" in text.upper():
+        return ""
+    cites = result.get("citations") or []
+    if cites:
+        text += "\n\nSources:\n" + "\n".join(f"• {c}" for c in cites[:3])
+    return text
+
+
+@authorized_only
+async def cmd_news(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """On-demand breaking-news sweep: /news."""
+    await _typing(update)
+    await update.effective_chat.send_message(
+        "📡 Scanning X + news for anything actionable on your wire…"
+    )
+    try:
+        text = await _run_news_scan(context)
+    except Exception as exc:
+        await _send(update, f"⚠️ News scan failed: <code>{digest.esc(exc)}</code>")
+        return
+    if text is None:
+        await _send(update, "⚠️ No response from the news scan.")
+    elif text == "":
+        await _send(
+            update,
+            "✅ Nothing actionable on your wire right now — no injury or role "
+            "news that frees up someone worth adding in your league.",
+        )
+    else:
+        await _send(update, "📡 <b>Breaking — act on this</b>\n\n" + digest.esc(text))
+
+
+async def job_news_watch(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Leading-indicator watch: read the news directly rather than waiting for
+    add volume to tell us what everyone already knows.
+
+    Silent unless there is something to act on, and it never repeats an alert
+    it has already sent — an alert channel that cries wolf gets muted, which
+    costs more than the miss it was trying to prevent.
+    """
+    hour = datetime.now(config.TIMEZONE).hour
+    if hour < config.NEWS_WATCH_START_HOUR or hour >= config.NEWS_WATCH_END_HOUR:
+        return
+    try:
+        text = await _run_news_scan(context)
+    except Exception as exc:
+        logger.warning("News watch failed: %s", exc)
+        return
+    if not text:
+        return
+
+    # Dedupe on the players named, so a story that stays in the news for a few
+    # cycles is announced once rather than every three hours.
+    seen: set = context.bot_data.setdefault("news_seen", set())
+    try:
+        ctx = await _ctx()
+        named = {
+            player_name(p)
+            for p in ctx.players.values()
+            if (p.get("position") or "") in ("QB", "RB", "WR", "TE")
+            and player_name(p) in text
+        }
+    except Exception:
+        named = set()
+    fresh = named - seen
+    if named and not fresh:
+        return
+    seen.update(named)
+
+    await _push(context, "📡 <b>Breaking — act on this</b>\n\n" + digest.esc(text))
+
+
 def _register_jobs(app: Application) -> None:
     jq = app.job_queue
     # Each job runs daily at its time but guards on the target weekday, so we
@@ -614,6 +700,13 @@ def _register_jobs(app: Application) -> None:
     jq.run_daily(job_post, time=config.POST_DIGEST_TIME, name="post_waiver")
     jq.run_daily(job_startsit, time=config.STARTSIT_TIME, name="friday_startsit")
     jq.run_daily(job_gameday, time=config.GAMEDAY_TIME, name="sunday_final")
+    if config.NEWS_WATCH_ENABLED and config.ENABLE_GROK:
+        app.job_queue.run_repeating(
+            job_news_watch,
+            interval=config.NEWS_WATCH_HOURS * 3600,
+            first=120,
+            name="news_watch",
+        )
     if config.FA_WATCH_ENABLED:
         jq.run_repeating(
             job_fa_watch,
@@ -661,6 +754,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("needs", cmd_needs))
     app.add_handler(CommandHandler("roster", cmd_roster))
     app.add_handler(CommandHandler("trending", cmd_trending))
+    app.add_handler(CommandHandler("news", cmd_news))
     app.add_handler(CommandHandler("player", cmd_player))
     app.add_handler(CommandHandler("deep", cmd_deep))
     app.add_handler(CommandHandler("trade", cmd_trade))

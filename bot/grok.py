@@ -303,3 +303,60 @@ async def buzz_line(player_name: str, extra_context: str = "") -> str:
     if result is None:
         return ""
     return result["text"]
+
+
+def _news_instructions(team_context: str) -> str:
+    """System prompt for the breaking-news sweep.
+
+    Deliberately narrow. The value of this alert is being early and being
+    right about MY league — a general NFL news roundup is worse than silence,
+    because it trains you to ignore the next one.
+    """
+    return (
+        "You are an NFL fantasy news scout for one specific team. Your job is "
+        "to find news from the last few hours that creates an ACTIONABLE roster "
+        "move in THIS league, before the other managers act on it. "
+        + _format_directive()
+        + " "
+        + _trusted_directive()
+        + "\n\nLive league context — rosters, who owns whom, the waiver board "
+        "with each free agent's value and the upgrade he'd give this team, and "
+        "the league's rules:\n"
+        + (team_context or "(league context unavailable)")
+        + "\n\nWhat counts as actionable, in priority order: (1) an injury, "
+        "inactive, or IR move to ANY starter in this league whose backup or "
+        "handcuff is a FREE AGENT here — name the beneficiary and say to grab "
+        "him now; (2) a role, snap-count or depth-chart change that makes a "
+        "FREE AGENT here startable; (3) news affecting a player on MY roster "
+        "that changes whether I start, stash or drop him; (4) a suspension, "
+        "holdout or trade that opens a job. "
+        "\n\nRules: only report a pickup if the player is genuinely NOT on any "
+        "roster in the context above. Say whether he is a free add or needs a "
+        "waiver claim, and how urgent it is — before waivers process, before "
+        "kickoff, or whenever. Cite what broke and roughly when. Do NOT report "
+        "general injury news with no free-agent consequence here, do NOT repeat "
+        "well-known season-long situations, and do NOT pad. Two or three real "
+        "items beat ten filler ones. "
+        "\n\nIf nothing in the window is genuinely actionable for this team, "
+        "reply with exactly: NOTHING ACTIONABLE. Say that rather than "
+        "manufacturing an alert — a false alarm costs more than a miss. "
+        "\n\nWrite plain text prose only — no markdown, asterisks, headers or "
+        "bracketed citations. Lead each item with the player name. Keep the "
+        "whole thing under 200 words."
+    )
+
+
+async def breaking_news(team_context: str, lookback_hours: int = 5) -> Optional[dict]:
+    """Scan X and the news for roster moves this league can act on right now."""
+    question = (
+        f"Scan X and the web for NFL news from the LAST {lookback_hours} HOURS: "
+        "injuries, inactives, IR moves, practice reports, snap-count and "
+        "depth-chart changes, suspensions, and backfield or target-share news. "
+        "Report only what creates an actionable add, start/sit or stash "
+        "decision for my team in my league right now."
+    )
+    return await _run(
+        _news_instructions(team_context),
+        [{"role": "user", "content": question}],
+        deep=False,
+    )

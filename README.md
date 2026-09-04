@@ -35,6 +35,7 @@ trades / lineup optimization auto-upgrade to the flagship model.
 | `/drops` | Droppable players on your roster |
 | `/roster` | Your team by position (injuries flagged) |
 | `/needs` | Where your roster is thin |
+| `/news` | Scan X + news now for anything actionable on your wire |
 | `/trending` | Most-added players across Sleeper right now |
 | `/player <name>` | Outlook + availability in your league + FAAB bid |
 | `/startsit` | Optimal lineup + start/sit calls for the week |
@@ -46,8 +47,18 @@ trades / lineup optimization auto-upgrade to the flagship model.
 
 Scheduled automatically (all ET, configurable): **pre-waiver** Mon 7pm,
 **post-waiver** Wed 6am, **start/sit** Fri 6:45pm, **last-minute start/sit**
-Sun 11:15am, plus a **live free-agent watch** every few hours (Sleeper-only,
-so it's free) that pings you when a hot pickup hits your wire.
+Sun 11:15am, plus two watches on your wire:
+
+- **Breaking-news watch** (every 3h, `NEWS_WATCH_*`) — reads X and the news
+  directly for injuries, inactives, snap-count and depth-chart changes, and
+  speaks *only* when the beneficiary is actually a free agent in your league:
+  who got hurt, who inherits the work, whether he's a free add or a waiver
+  claim, and how long you have. This is the leading signal — the point is to
+  act before your leaguemates see it. It stays silent when there's nothing,
+  and never repeats an alert it has already sent.
+- **Free-agent watch** (every 4h, Sleeper-only so it's free) — fires once a
+  player is already being added league-wide. A lagging confirmation, useful as
+  a backstop but never first.
 
 ## Setup
 

@@ -221,6 +221,14 @@ def roster_tiers(ctx: Any, roster: Optional[dict] = None) -> dict[str, str]:
         by_pos.setdefault(pos, []).append((score, pid))
 
     depth = starter_depth(ctx)
+    # Anyone this week's lineup actually starts is a starter, whatever his
+    # season-long value says. A flex-worthy player can project as replaceable
+    # over a full season and still be the best option in a slot right now;
+    # calling him expendable is how you end up recommending a cut and a start
+    # for the same man in the same breath.
+    lineup, _ = optimal_lineup(ctx, roster)
+    starting = {e["player_id"] for e in lineup if e.get("player_id")}
+
     tiers: dict[str, str] = {}
     for pos, players in by_pos.items():
         players.sort(reverse=True)
@@ -228,7 +236,7 @@ def roster_tiers(ctx: Any, roster: Optional[dict] = None) -> dict[str, str]:
         for i, (score, pid) in enumerate(players):
             if i < starters and score >= 60:
                 tiers[pid] = "CORE"
-            elif i < starters:
+            elif i < starters or pid in starting:
                 tiers[pid] = "STARTER"
             elif score <= 0:
                 tiers[pid] = "EXPENDABLE"
