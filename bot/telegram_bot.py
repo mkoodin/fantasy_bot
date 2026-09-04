@@ -446,17 +446,27 @@ async def cmd_diag(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "players priced)"
         )
         if ranks:
-            # Shown as ranks because those are checkable by eye: a 12-team
-            # league should land near RB35/WR47/TE15/QB14. Anything wildly off
-            # means an input is wrong — most likely market rank read backwards.
+            # Shown as ranks because those are checkable by eye — but the
+            # expected value depends entirely on THIS league's starting slots,
+            # so show the demand it was derived from rather than a number
+            # borrowed from some other league's roster settings.
+            n_teams = max(1, len(ctx.rosters))
+            demand = valuation.expected_starts(ctx)
             lines.append(
                 "  <i>replacement level: "
                 + digest.esc(", ".join(
                     f"{pos}{ranks[pos]} ({levels[pos]:.0f}pts)"
                     for pos in sorted(ranks)
                 ))
-                + " — sanity check: a 12-team league should be near RB35, "
-                "WR47, TE15, QB14</i>"
+                + "</i>"
+            )
+            lines.append(
+                f"  <i>derived from {n_teams} teams × starters/team ("
+                + digest.esc(", ".join(
+                    f"{pos} {demand[pos] / n_teams:.1f}"
+                    for pos in sorted(demand)
+                ))
+                + ") + bench padding — check these match your lineup slots</i>"
             )
         if not ctx.has_projections:
             lines.append(
