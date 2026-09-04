@@ -74,24 +74,6 @@ def _trusted_directive() -> str:
     )
 
 
-def _instructions() -> str:
-    return (
-        "You are a sharp NFL fantasy football analyst. Using the X posts and web "
-        "results you searched, give a concise, decision-oriented read for the "
-        "player asked about. "
-        + _format_directive()
-        + " "
-        + _trusted_directive()
-        + " Prioritize credible sources over hype. Cover, only if relevant: "
-        "injury/practice status, snap-count or role change, matchup, and whether "
-        "they're worth a waiver/FAAB add THIS week. Be direct. If the buzz is thin "
-        "or just noise, say so. Keep it under 140 words. Write plain text prose "
-        "only — NO markdown: no **bold** or asterisks, no headers, and no inline "
-        "links or bracketed citation markers like [[1]]. End with one line: "
-        "'Verdict: <ADD / STASH / HOLD / PASS> — <short why>'."
-    )
-
-
 def _tools() -> list[dict]:
     from_date = (
         datetime.now(timezone.utc) - timedelta(days=config.GROK_LOOKBACK_DAYS)
@@ -258,18 +240,6 @@ async def _run(
     return {"text": text, "citations": citations}
 
 
-async def analyze_player(
-    player_name: str, extra_context: str = "", deep: bool = False
-) -> Optional[dict]:
-    """Live buzz on a single player. {'text', 'citations'} or None if off."""
-    ctx_line = f" Context: {extra_context}." if extra_context else ""
-    user_msg = (
-        f"What's the latest fantasy-relevant buzz on {player_name} (NFL)?"
-        f"{ctx_line} Focus on the last few days."
-    )
-    return await _run(_instructions(), [{"role": "user", "content": user_msg}], deep=deep)
-
-
 async def answer_question(
     question: str,
     team_context: str = "",
@@ -295,14 +265,6 @@ async def answer_question(
     if deep is None:
         deep = prompting.wants_deep(question)
     return await _run(_answer_instructions(team_context), messages, deep=deep)
-
-
-async def buzz_line(player_name: str, extra_context: str = "") -> str:
-    """Compact one-block buzz suitable for embedding in a digest."""
-    result = await analyze_player(player_name, extra_context)
-    if result is None:
-        return ""
-    return result["text"]
 
 
 def _news_instructions(team_context: str) -> str:

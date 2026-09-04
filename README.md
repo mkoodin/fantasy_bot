@@ -84,6 +84,30 @@ service (`restartPolicy: ON_FAILURE`). Push the repo, set the environment
 variables, and it stays live — polling Telegram for commands and firing the
 scheduled digests. No Railway Cron needed; the scheduler is internal.
 
+## How it thinks
+
+The model is told to reason in a fixed order on every question, because the
+order is what separates a decision from a guess:
+
+1. **Opportunity beats efficiency.** Snap share, routes, target share and
+   especially red-zone and goal-line work are the foundation. Yards per carry
+   and catch rate swing wildly and regress; volume persists.
+2. **Usage leads production by one to two weeks.** When snaps or targets climb
+   before the points arrive, that's the buying window — and it closes once the
+   box score catches up and the rest of the league sees it. This is the edge the
+   bot is built to hunt, and why the news watch reads reporting directly rather
+   than waiting on add counts.
+3. **Role is the question, not talent.** What job does he have, and did
+   anything change it — a depth-chart move, an injury ahead of him, a committee
+   resolving? A first-string listing the market hasn't repriced is worth more
+   than a famous name in a timeshare.
+4. **Game script shapes volume.** Favored teams run, trailing teams throw.
+5. **Sample size and regression.** One big game is noise. Discount a hot week
+   built on touchdowns that won't repeat; don't abandon an intact role after a
+   quiet one.
+6. **Availability is a prerequisite.** A player on bye or ruled out scores zero
+   regardless of talent, and the context flags it.
+
 ## How the numbers are decided
 
 - **FAAB bids** are a percentage of your *remaining* budget, scaled by a
@@ -94,6 +118,12 @@ scheduled digests. No Railway Cron needed; the scheduler is internal.
   starters (including flex demand on RB/WR/TE).
 - **Drops** are scored from injury status, league-wide drop velocity, and how
   buried a player is on your depth chart.
+- **Depth chart and availability** come straight from Sleeper. A player listed
+  first string who's still unowned is flagged as a market lag worth taking; a
+  #2 is flagged as the next man up. Sleeper's feed carries no bye weeks, so
+  they're inferred from the weekly projection feed: a player with a real season
+  projection who's absent from this week's has no game, and is both barred from
+  the lineup and protected from being dropped for it.
 - **Player value** is the number everything else hangs off, and it's computed,
   not remembered. Raw projected points can't be compared across positions — a
   QB outscores every running back and is still the cheapest starter to replace,

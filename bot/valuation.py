@@ -23,6 +23,34 @@ Layered on top:
 import math
 from typing import Any, Optional
 
+# Several of these helpers are called repeatedly while assembling one answer —
+# the optimal lineup alone was recomputed five times per request, and the
+# positional pools once per caller. They are pure functions of a LeagueContext
+# that is itself rebuilt on a TTL, so memoizing per context is safe and removes
+# the repeat work. Bounded so a long-running process cannot accumulate entries.
+_MEMO: dict[tuple, Any] = {}
+_MEMO_MAX = 64
+
+
+def clear_memo() -> None:
+    """Drop all cached derivations. Called whenever a context is rebuilt.
+
+    Keys include id(ctx), and CPython reuses object ids after collection — so
+    without this, a freshly built context could be served values derived from
+    the one it replaced.
+    """
+    _MEMO.clear()
+
+
+def _memo(ctx: Any, key: tuple, build):
+    """Cache a derived value for the lifetime of one LeagueContext."""
+    full = (id(ctx), *key)
+    if full not in _MEMO:
+        if len(_MEMO) >= _MEMO_MAX:
+            _MEMO.clear()
+        _MEMO[full] = build()
+    return _MEMO[full]
+
 from .sleeper import FANTASY_POSITIONS, player_name
 
 # Positions we can meaningfully value. K and DEF are streamed, not traded.
@@ -108,17 +136,20 @@ def _pool(ctx: Any, position: str) -> list[tuple[float, str]]:
     and the replacement baseline doesn't drift just because a projection is
     absent.
     """
-    out: list[tuple[float, str]] = []
-    for pid, ranks in ctx.market_ranks.items():
-        p = ctx.players.get(pid) or {}
-        if (p.get("position") or "") != position:
-            continue
-        pts = ctx.season_projections.get(pid)
-        if pts is None:
-            pts = _synthetic_points(position, ranks[0])
-        out.append((float(pts), pid))
-    out.sort(reverse=True)
-    return out
+    def build() -> list[tuple[float, str]]:
+        out: list[tuple[float, str]] = []
+        for pid, ranks in ctx.market_ranks.items():
+            p = ctx.players.get(pid) or {}
+            if (p.get("position") or "") != position:
+                continue
+            pts = ctx.season_projections.get(pid)
+            if pts is None:
+                pts = _synthetic_points(position, ranks[0])
+            out.append((float(pts), pid))
+        out.sort(reverse=True)
+        return out
+
+    return _memo(ctx, ("pool", position), build)
 
 
 def replacement_levels(ctx: Any) -> dict[str, float]:
@@ -128,6 +159,13 @@ def replacement_levels(ctx: Any) -> dict[str, float]:
     bench allowance — effectively the best guy on waivers. Value above this
     line is what a trade is actually negotiating over.
     """
+    def build() -> dict[str, float]:
+        return _replacement_levels(ctx)
+
+    return _memo(ctx, ("levels",), build)
+
+
+def _replacement_levels(ctx: Any) -> dict[str, float]:
     demand = expected_starts(ctx)
     levels: dict[str, float] = {}
     for pos in VALUED_POSITIONS:
@@ -385,11 +423,16 @@ def trade_posture_context(ctx: Any) -> str:
 def week_points(ctx: Any, pid: str) -> float:
     """This week's projected points, discounted for injury.
 
-    Falls back to a season projection scaled to one game when the weekly feed
-    is unavailable, which preserves ordering even if the magnitude is coarse.
+    The per-game fallback applies only when the weekly feed is missing
+    ENTIRELY. When the feed loaded and this player simply isn't in it, he has
+    no game — bye, or inactive — and is worth zero. Falling back to his season
+    average there would rank a player on bye as a top starter, which is the one
+    lineup mistake that costs a guaranteed zero.
     """
     pts = ctx.week_projections.get(pid)
     if pts is None:
+        if ctx.week_projections:
+            return 0.0
         season = ctx.season_projections.get(pid)
         pts = (season / 17.0) if season is not None else 0.0
     return pts * injury_multiplier(ctx.players.get(pid))
@@ -405,9 +448,15 @@ def optimal_lineup(ctx: Any, roster: Optional[dict] = None) -> tuple[list[dict],
 
     Returns (starters, bench), each entry carrying the slot and projection.
     """
+    roster = roster or ctx.my_roster
+    if roster is ctx.my_roster:
+        return _memo(ctx, ("lineup",), lambda: _optimal_lineup(ctx, roster))
+    return _optimal_lineup(ctx, roster)
+
+
+def _optimal_lineup(ctx: Any, roster: dict) -> tuple[list[dict], list[dict]]:
     from .analysis import BENCH_SLOTS, FLEX_ELIGIBILITY
 
-    roster = roster or ctx.my_roster
     slots = [s for s in ctx.league.get("roster_positions", []) if s not in BENCH_SLOTS]
     available = sorted(
         (roster.get("players") or []),
@@ -475,6 +524,10 @@ def lineup_context(ctx: Any) -> str:
             continue
         p = ctx.players.get(pid) or {}
         flag = f" ⚠{p['injury_status']}" if p.get("injury_status") else ""
+        if is_unavailable_this_week(ctx, pid):
+            # Starting a player on bye is a self-inflicted zero, and it is the
+            # one lineup mistake no amount of matchup analysis recovers from.
+            flag += " ⛔ NO GAME THIS WEEK — BYE OR INACTIVE, DO NOT START"
         total += entry["points"]
         lines.append(
             f"  {entry['slot']}: {player_name(p)} "
@@ -663,6 +716,16 @@ def upside_flags(ctx: Any, pid: str) -> list[str]:
             if flags:
                 break
 
+    dc = depth_chart(ctx, pid)
+    if dc:
+        order, slot = dc
+        if order == 1:
+            # First string but priced as a free agent: the market has not
+            # repriced him yet, which is precisely the window worth taking.
+            flags.append(f"listed FIRST STRING at {slot} — market hasn't caught up")
+        elif order == 2:
+            flags.append(f"next man up at {slot} (depth chart #2)")
+
     exp = p.get("years_exp")
     if isinstance(exp, int) and exp <= 1:
         flags.append("rookie/2nd-year — role can still grow")
@@ -742,3 +805,33 @@ def is_out_eligible(ctx: Any, pid: str) -> bool:
         if st.get(key):
             allowed.add(label)
     return status in allowed
+
+
+# --- Depth chart and availability ------------------------------------------
+def depth_chart(ctx: Any, pid: str) -> Optional[tuple[int, str]]:
+    """(order, slot) from Sleeper's depth chart, e.g. (1, 'RB') or (2, 'LWR').
+
+    Order 1 is the starter. This is the field that tells you a rookie has
+    climbed to first string before the projections or the market catch up,
+    which is the whole reason to watch it.
+    """
+    p = ctx.players.get(pid) or {}
+    order = p.get("depth_chart_order")
+    slot = p.get("depth_chart_position")
+    if not isinstance(order, int) or not slot:
+        return None
+    return order, str(slot)
+
+
+def is_unavailable_this_week(ctx: Any, pid: str) -> bool:
+    """True when a rostered player has no game projected — bye, or inactive.
+
+    Sleeper's player feed carries no bye week, but the weekly projection feed
+    simply omits a player who isn't playing. Only meaningful when weekly
+    projections loaded at all, otherwise everyone would look benched.
+    """
+    if not ctx.week_projections:
+        return False
+    if (ctx.season_projections.get(pid) or 0) < 20:
+        return False  # Never projected for anything; absence says nothing.
+    return not ctx.week_projections.get(pid)

@@ -140,6 +140,7 @@ async def build_context(client: SleeperClient, force: bool = False) -> LeagueCon
     if not force and _cache["ctx"] and now - _cache["ts"] < config.CONTEXT_TTL:
         return _cache["ctx"]
 
+    valuation.clear_memo()
     user_id = await resolve_user_id(client)
     league_id = await resolve_league_id(client, user_id)
     if not league_id:
@@ -440,6 +441,11 @@ def value_tag(ctx: "LeagueContext", pid: str) -> str:
     week = ctx.week_projections.get(pid)
     if week is not None:
         bits.append(f"{week} this wk")
+    dc = valuation.depth_chart(ctx, pid)
+    if dc:
+        bits.append(f"depth chart #{dc[0]} at {dc[1]}")
+    if valuation.is_unavailable_this_week(ctx, pid):
+        bits.append("NO GAME THIS WEEK (bye or inactive)")
     drafted = ctx.draft_picks.get(pid)
     if drafted and drafted.get("round"):
         bits.append(f"drafted R{drafted['round']}")
@@ -885,7 +891,12 @@ async def available_fa_context(
     Complements the waiver board: velocity is a leading indicator of news the
     value scores haven't caught up to yet, so both signals go to the model.
     """
-    trending = await client.get_trending("add", lookback_hours=72, limit=100)
+    try:
+        trending = await client.get_trending("add", lookback_hours=72, limit=100)
+    except Exception:
+        # Velocity is a supporting signal; the waiver board above already
+        # carries the ranked list. Degrade rather than lose the whole answer.
+        return ""
     by_pos: dict[str, list[str]] = {}
     for entry in trending:
         pid = entry.get("player_id")
@@ -935,9 +946,12 @@ async def hot_free_agents(
 
     Each entry: {player, player_id, adds, position, fills_need}.
     """
-    trending = await client.get_trending(
-        "add", lookback_hours=lookback_hours, limit=100
-    )
+    try:
+        trending = await client.get_trending(
+            "add", lookback_hours=lookback_hours, limit=100
+        )
+    except Exception:
+        return []
     needs = need_positions(ctx)
     results: list[dict] = []
     for entry in trending:
@@ -1123,15 +1137,24 @@ async def drop_candidates(
     Signals (higher = more droppable): out/IR status, appearing in the
     league-wide trending-drop list, and being buried depth at a position.
     """
-    trending_drop = await client.get_trending("drop", lookback_hours=48, limit=100)
-    drop_velocity = {e["player_id"]: int(e.get("count") or 0) for e in trending_drop}
+    try:
+        trending_drop = await client.get_trending("drop", lookback_hours=48, limit=100)
+    except Exception:
+        trending_drop = []
+    drop_velocity = {
+        e["player_id"]: int(e.get("count") or 0)
+        for e in trending_drop
+        if e.get("player_id")
+    }
 
     grouped = my_players_by_position(ctx)
     # Rank within each position so we know who's buried.
     depth_rank: dict[str, int] = {}
     for pos, players in grouped.items():
         for i, p in enumerate(players):
-            depth_rank[p["player_id"]] = i
+            key = p.get("player_id")
+            if key:
+                depth_rank[key] = i
 
     required = required_starters(ctx)
     starters, _ = valuation.optimal_lineup(ctx)
@@ -1159,6 +1182,11 @@ async def drop_candidates(
             continue
         if pid in on_ir:
             continue  # Already stashed — not occupying a bench spot.
+        if valuation.is_unavailable_this_week(ctx, pid):
+            # On bye or inactive this week. That is temporary, and cutting a
+            # useful player because he happens to be off this week is the
+            # inverse of the mistake of starting him.
+            continue
         if pid in starting_ids:
             # Season-long value can rate a weekly starter as replaceable.
             # Telling you to start a man and cut him in the same breath is
