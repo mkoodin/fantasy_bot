@@ -51,7 +51,22 @@ CORE_DIRECTIVE = (
     "Discount a hot week built on scores that will not repeat, and do not "
     "abandon a player whose role is intact after a quiet week. "
     "AVAILABILITY IS A PREREQUISITE. A player on bye or ruled out scores zero "
-    "regardless of talent — the context flags this, never start him.]"
+    "regardless of talent — the context flags this, never start him. "
+    "BENCH SPOTS ARE NOT SMALL STARTING SPOTS. Judge a starter on expected "
+    "points and reliability; judge a bench player on the chance he becomes "
+    "something. A backup who inherits a job the moment one thing goes wrong is "
+    "worth more than a veteran you will never start, even though the veteran "
+    "outprojects him every week — the context gives this as contingent value. "
+    "The last roster spots are working capital: churn them. "
+    "GET THERE FIRST. You are predicting the league's reaction as much as the "
+    "player. Ask what the other managers will want next week and whether you "
+    "can hold it now, and prefer the move nobody has priced yet over the one "
+    "everyone can see. "
+    "THINK IN DISTRIBUTIONS, NOT VERDICTS. Say what is likely and how likely, "
+    "not what will happen. Update on structural news fast — a starter lost for "
+    "the season resolves in one snap — and on statistical noise slowly. "
+    "DOING NOTHING IS A MOVE. Activity is not skill. If nothing improves "
+    "expected points, upside, risk or flexibility, say so and stand pat.]"
 )
 
 
@@ -219,3 +234,77 @@ def directives_for(question: str) -> str:
     if is_waiver(question):
         parts.append(WAIVER_DIRECTIVE)
     return "".join(parts)
+
+
+# --- The weekly operating rhythm -------------------------------------------
+# Each day of the week has a different job. A Monday answer that reads like a
+# Sunday answer is doing the wrong work: Monday is for reading what changed in
+# usage, Tuesday for pricing waivers, Saturday for optionality. Stating the
+# day's job keeps the process disciplined instead of re-deriving it each time.
+DAY_JOBS = {
+    0: (  # Monday
+        "MONDAY — postmortem, and do not chase points. The job is to find what "
+        "CHANGED in usage, not who scored. For every relevant offense ask whose "
+        "role became more valuable: snap share, route participation, target "
+        "share, carries, third-down and two-minute work, goal-line and inside-5 "
+        "carries, red-zone and end-zone targets. Classify every notable "
+        "performance as role-driven (a real structural change — buy "
+        "aggressively), skill-driven, situation-driven (game script inflated "
+        "the volume), efficiency-driven, or touchdown-driven (the most "
+        "dangerous to chase). Then build the waiver board before the articles "
+        "tell everyone what to do."
+    ),
+    1: (  # Tuesday
+        "TUESDAY — injury forensics and waiver pricing. For each injury map the "
+        "tree: who replaces him, what share do they inherit, whose role changes "
+        "downstream, does the passing game or goal-line work move. Identify the "
+        "players who are ONE INJURY AWAY from immediate starter value and are "
+        "still available — those are options worth buying before the event. "
+        "Price claims by tier: potential season-changer, probable starter, "
+        "ascending role, contingent upside, one-week streamer, and empty "
+        "calories that will never be worth more than they are today."
+    ),
+    2: (  # Wednesday
+        "WEDNESDAY — attack what waivers left behind. The easy edge is here: "
+        "everyone watches who WON a claim, almost nobody inspects who went "
+        "unclaimed, and what other managers DROPPED to make room. Look for the "
+        "targets ranked 4th through 8th, backup backs, ascending rookies, "
+        "injured players nearing return, and future streamers."
+    ),
+    3: (  # Thursday
+        "THURSDAY — start/sit work begins, and Thursday-night lineup mechanics. "
+        "Anyone playing tonight locks first, so keep them out of FLEX where the "
+        "roster allows: FLEX is the slot you want free to absorb a Sunday "
+        "inactive. Flag anyone questionable for Sunday who needs an insurance "
+        "plan now."
+    ),
+    4: (  # Friday
+        "FRIDAY — practice reports and the multi-week plan. Trajectory is what "
+        "matters: DNP to limited to full is a different player from full to "
+        "limited to DNP. Do not stop at whether he plays — ask whether he plays "
+        "in his NORMAL ROLE, because a decoy at 45% of snaps is worse than his "
+        "healthy backup. Then look two to four weeks out: byes, streaming "
+        "positions, and anything worth acquiring a week early while it is cheap."
+    ),
+    5: (  # Saturday
+        "SATURDAY — bench audit and free optionality. For every bench player "
+        "answer why exactly you own him; 'he's decent' means that spot is being "
+        "wasted. Then take the free options: if a starter is questionable for "
+        "Sunday and his backup is available, adding the backup costs a "
+        "disposable roster spot and pays a starter if the inactive lands."
+    ),
+    6: (  # Sunday
+        "SUNDAY — information war. Inactives, beat reporters, warmups, weather, "
+        "and offensive-line absences, in that order of urgency. When something "
+        "breaks, run it through: injury, replacement, workload, projection, "
+        "lineup, waiver consequence. Early games lock first, so preserve "
+        "flexibility in later slots. Anything you learn today is also the start "
+        "of next week's waiver board."
+    ),
+}
+
+
+def day_directive(weekday: int) -> str:
+    """The operating job for a given weekday (Monday = 0)."""
+    job = DAY_JOBS.get(weekday)
+    return f"\n\n[TODAY'S JOB — {job}]" if job else ""

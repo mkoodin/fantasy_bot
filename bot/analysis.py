@@ -63,6 +63,8 @@ class LeagueContext:
     player_values: dict[str, dict] = field(default_factory=dict)
     # player_id -> CORE / STARTER / DEPTH / EXPENDABLE, for your roster only.
     roster_tiers: dict[str, str] = field(default_factory=dict)
+    # week number -> set of player_ids with no game that week (byes ahead).
+    upcoming_byes: dict[int, set] = field(default_factory=dict)
 
     @property
     def has_projections(self) -> bool:
@@ -203,6 +205,10 @@ async def build_context(client: SleeperClient, force: bool = False) -> LeagueCon
     # to market rank, so trade logic keeps working either way.
     ctx.player_values = valuation.compute_values(ctx)
     ctx.roster_tiers = valuation.roster_tiers(ctx)
+    try:
+        ctx.upcoming_byes = await load_upcoming_byes(ctx, client)
+    except Exception:
+        ctx.upcoming_byes = {}
 
     _cache["ctx"] = ctx
     _cache["ts"] = now
@@ -389,6 +395,46 @@ async def load_draft_picks(ctx: "LeagueContext", client: SleeperClient) -> dict[
             "pick": pick.get("draft_slot") or pick.get("pick_no"),
             "overall": pick.get("pick_no"),
         }
+    return out
+
+
+async def load_upcoming_byes(
+    ctx: LeagueContext, client: SleeperClient, weeks_ahead: int = 3
+) -> dict[int, set]:
+    """Which of your players have no game in each of the next few weeks.
+
+    Sleeper publishes no bye schedule, but a player who isn't playing is simply
+    absent from that week's projections — so the byes can be read forward the
+    same way they're read for this week. Looking ahead is the point: a bye that
+    takes out three starters at once is a roster problem to solve two weeks
+    early and cheaply, not on Sunday morning.
+    """
+    mine = set(ctx.my_roster.get("players") or [])
+    if not mine or is_offseason(ctx):
+        return {}
+    key = _scoring_key(ctx)
+    out: dict[int, set] = {}
+    for wk in range(ctx.week + 1, ctx.week + 1 + weeks_ahead):
+        try:
+            rows = await client.get_projections(ctx.season, wk)
+        except Exception:
+            continue
+        if not rows:
+            continue
+        playing = {
+            str(r.get("player_id"))
+            for r in rows
+            if r.get("player_id") and projected_points(r, key) is not None
+        }
+        missing = {
+            pid
+            for pid in mine
+            # Only players who matter: someone projected for nothing all season
+            # tells you nothing by being absent.
+            if (ctx.season_projections.get(pid) or 0) >= 20 and pid not in playing
+        }
+        if missing:
+            out[wk] = missing
     return out
 
 
@@ -720,6 +766,40 @@ def scoring_context(ctx: LeagueContext) -> str:
     )
 
 
+def bye_outlook_context(ctx: LeagueContext) -> str:
+    """Who disappears in the coming weeks, and whether that breaks the lineup."""
+    if not ctx.upcoming_byes:
+        return ""
+    depth = valuation.starter_depth(ctx)
+    lines = [
+        "BYE / OFF WEEKS AHEAD for players on YOUR roster. Plan for these now "
+        "while the wire is cheap, not on the morning of:"
+    ]
+    for wk in sorted(ctx.upcoming_byes):
+        out = ctx.upcoming_byes[wk]
+        by_pos: dict[str, list[str]] = {}
+        for pid in out:
+            p = ctx.players.get(pid) or {}
+            by_pos.setdefault(p.get("position") or "?", []).append(player_name(p))
+        parts = []
+        crunch = []
+        for pos, names in sorted(by_pos.items()):
+            parts.append(f"{pos}: {', '.join(sorted(names))}")
+            owned = sum(
+                1
+                for x in (ctx.my_roster.get("players") or [])
+                if (ctx.players.get(x) or {}).get("position") == pos
+            )
+            need = depth.get(pos, 1)
+            if owned - len(names) < need:
+                crunch.append(f"{pos} (leaves {owned - len(names)} for {need} slots)")
+        line = f"  Week {wk} — {'; '.join(parts)}"
+        if crunch:
+            line += f" ⚠ SHORT AT {', '.join(crunch)} — cover this in advance"
+        lines.append(line)
+    return "\n".join(lines)
+
+
 def league_rules_context(ctx: LeagueContext) -> str:
     """The league's operating rules: deadlines, waiver timing, IR, vetoes.
 
@@ -798,11 +878,12 @@ async def full_league_context(ctx: LeagueContext, client: SleeperClient) -> str:
         scoring_context(ctx),
         league_rules_context(ctx),
         valuation.lineup_context(ctx),
+        bye_outlook_context(ctx),
         league_rosters_context(ctx),
         value_board_context(ctx),
         valuation.trade_posture_context(ctx),
+        valuation.rival_intel_context(ctx),
         waiver_board_context(ctx),
-        league_faab_context(ctx),
     ]
     fa = await available_fa_context(ctx, client)
     if fa:

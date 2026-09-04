@@ -108,6 +108,21 @@ order is what separates a decision from a guess:
 6. **Availability is a prerequisite.** A player on bye or ruled out scores zero
    regardless of talent, and the context flags it.
 
+## The weekly operating rhythm
+
+Each day has a different job, and the bot is told which one it's doing. A
+Monday answer should not read like a Sunday answer.
+
+| Day | The job |
+|---|---|
+| **Mon** | Postmortem on *usage*, not points. Classify every notable game as role-, skill-, situation-, efficiency- or TD-driven. Build the waiver board before the articles do. |
+| **Tue** | Injury forensics — map the whole tree downstream of each injury. Find the players one injury away from starter value who are still free. |
+| **Wed** | Attack what waivers left behind: unclaimed targets, and what rivals *dropped* to make room. |
+| **Thu** | Start/sit begins. Keep Thursday players out of FLEX — that slot is your Sunday insurance. |
+| **Fri** | Practice-report trajectory (DNP→LP→FP is a different player from FP→LP→DNP), and the 2–4 week plan. |
+| **Sat** | Bench audit — every spot needs a reason. Take the free options on questionable starters. |
+| **Sun** | Information war: inactives, beat reporters, weather, O-line. Early games lock first, so preserve late flexibility. |
+
 ## How the numbers are decided
 
 - **FAAB bids** are a percentage of your *remaining* budget, scaled by a
@@ -175,6 +190,24 @@ order is what separates a decision from a guess:
   all reach the model, so it won't propose a trade after the deadline or tell
   you to cut a player you could stash on IR for free. Drop rankings skip
   IR-eligible injuries outright while a slot is open.
+- **Every player carries three valuations**, because they answer different
+  questions: what he's worth *this week*, his *rest-of-season* value, and his
+  *ceiling* if the situation breaks his way. A backup back behind a workhorse
+  might read `week 0.0 · ros 0.0 · ceiling 70.0`.
+- **Bench spots are not small starting spots.** A starter is judged on expected
+  points; a bench player is judged on the chance he becomes something. So bench
+  ranking uses **contingent value** — what a player inherits if the man ahead of
+  him disappears, weighted by how cleanly the job transfers (RB roles transfer;
+  receiving roles get redistributed). The effect: a handcuff with ceiling 70
+  outranks a veteran who outprojects him weekly but will never be started.
+- **Byes are read three weeks forward.** Sleeper publishes no bye schedule, so
+  they're inferred from future weekly projection feeds, and flagged when a week
+  leaves you short at a position: *"Week 4 — WR: Nacua, Olave ⚠ SHORT AT TE"*.
+  Cover it early while the wire is cheap.
+- **Rival intel makes waivers game theory.** Each opponent's surplus, holes and
+  remaining FAAB are computed, so a bid can be priced against who would actually
+  start the player — and trade partners are picked by matching their surplus to
+  your hole.
 - **Roster fit** decides who's actually available to trade. Every player on your
   team is tiered CORE / STARTER / DEPTH / EXPENDABLE by ranking him within his
   position against how many that slot really starts. Offers get built from

@@ -258,7 +258,15 @@ async def answer_question(
     scheduled digests run several times a week and choose the cheaper model
     deliberately, so auto-escalation must not override them.
     """
-    directed = question + prompting.directives_for(question)
+    from datetime import datetime
+
+    # The day's job is part of the process, not decoration: Monday's answer
+    # should be reading usage where Saturday's is buying optionality.
+    directed = (
+        question
+        + prompting.directives_for(question)
+        + prompting.day_directive(datetime.now(config.TIMEZONE).weekday())
+    )
     # History keeps the user's original wording — directives are per-call
     # scaffolding, not part of the conversation.
     messages = list(history or []) + [{"role": "user", "content": directed}]

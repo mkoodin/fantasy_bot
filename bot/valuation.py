@@ -633,8 +633,9 @@ def worst_rosterable(ctx: Any) -> Optional[tuple[str, float]]:
         tier = ctx.roster_tiers.get(pid)
         if tier in ("CORE", "STARTER"):
             continue
-        score = (ctx.player_values.get(pid) or {}).get("base_score", 0.0)
-        candidates.append((score, pid))
+        # Bench value, not season value: the backup who inherits a job if one
+        # thing goes wrong is worth more than the veteran you will never start.
+        candidates.append((bench_value(ctx, pid), pid))
     if not candidates:
         return None
     score, pid = min(candidates)
@@ -745,6 +746,10 @@ def upside_flags(ctx: Any, pid: str) -> list[str]:
     week = ctx.week_projections.get(pid)
     if week is not None and week >= 8:
         flags.append(f"already projected {week} this week")
+
+    cv = contingent_value(ctx, pid)
+    if cv >= 20:
+        flags.append(f"contingent value {cv} if the job opens")
     return flags
 
 
@@ -835,3 +840,138 @@ def is_unavailable_this_week(ctx: Any, pid: str) -> bool:
     if (ctx.season_projections.get(pid) or 0) < 20:
         return False  # Never projected for anything; absence says nothing.
     return not ctx.week_projections.get(pid)
+
+
+# --- Contingent value -------------------------------------------------------
+# A bench spot is not a small starting spot. A starter is judged on expected
+# points and reliability; a bench player is judged on the chance he becomes
+# something. The third receiver on a deep roster who will never be started is
+# worth less than a backup back who inherits a job the moment one thing goes
+# wrong, even though the receiver outprojects him every week of the season.
+# This is the number that makes that comparison possible.
+
+# What share of the job ahead of him a backup actually inherits. A clear
+# handcuff takes most of it; a crowded room splits it and nobody gets full
+# value, which is why "who is the backup" matters less than "would he be the
+# guy".
+_INHERITANCE = {2: 0.70, 3: 0.35}
+
+
+def contingent_value(ctx: Any, pid: str) -> float:
+    """What this player would be worth if the man ahead of him disappeared.
+
+    Zero for anyone already starting for his NFL team — his value is not
+    contingent, it is realized, and already priced.
+    """
+    p = ctx.players.get(pid) or {}
+    pos, team = p.get("position"), p.get("team")
+    if pos not in ("QB", "RB", "WR", "TE") or not team:
+        return 0.0
+
+    dc = depth_chart(ctx, pid)
+    order = dc[0] if dc else None
+
+    # Everyone ahead of him at his position on his NFL team.
+    ahead = sorted(
+        (
+            (ctx.player_values.get(x) or {}).get("base_score", 0.0)
+            for x, xp in ctx.players.items()
+            if x != pid
+            and xp.get("team") == team
+            and xp.get("position") == pos
+            and (ctx.player_values.get(x) or {}).get("base_score", 0.0) > 0
+        ),
+        reverse=True,
+    )
+    if not ahead:
+        return 0.0
+
+    # Without a depth chart, infer position from how many outrank him here.
+    if order is None:
+        mine = (ctx.player_values.get(pid) or {}).get("base_score", 0.0)
+        order = 1 + sum(1 for v in ahead if v > mine)
+    if order <= 1:
+        return 0.0
+
+    share = _INHERITANCE.get(order, 0.15)
+    # RB jobs transfer most cleanly; receiving roles get redistributed.
+    if pos != "RB":
+        share *= 0.6
+    return round(ahead[0] * share, 1)
+
+
+def player_profile(ctx: Any, pid: str) -> dict:
+    """The three valuations every rosterable player carries.
+
+    week    — what he is worth in this week's lineup
+    ros     — rest-of-season value, comparable across positions
+    ceiling — what he becomes if the situation breaks his way
+    """
+    v = ctx.player_values.get(pid) or {}
+    return {
+        "week": round(week_points(ctx, pid), 1),
+        "ros": v.get("base_score", 0.0),
+        "ceiling": max(v.get("base_score", 0.0), contingent_value(ctx, pid)),
+    }
+
+
+def bench_value(ctx: Any, pid: str) -> float:
+    """How much a player is worth OCCUPYING A BENCH SPOT.
+
+    Deliberately the higher of his rest-of-season value and his contingent
+    value: a bench spot exists to hold either a contributor or an option on
+    one, and judging both by current points throws away the option.
+    """
+    prof = player_profile(ctx, pid)
+    return max(prof["ros"], prof["ceiling"])
+
+
+def rival_intel_context(ctx: Any) -> str:
+    """What every other manager is short of, and what they can spend.
+
+    Waivers are game theory, not just valuation: the same player costs a
+    different amount depending on how many teams would start him and whether
+    they have budget left. This is the table that makes that reasoning
+    possible, and it doubles as the trade-partner map — a manager deep at one
+    position and short at another is who you deal with.
+    """
+    if not ctx.player_values:
+        return ""
+    depth = starter_depth(ctx)
+    lines = [
+        "RIVAL INTEL — each team's positional strength, holes, and remaining "
+        "FAAB. Use it two ways: to predict who bids against you on a waiver "
+        "claim (they need the position AND have budget), and to pick trade "
+        "partners whose surplus matches your hole:"
+    ]
+    for r in sorted(ctx.rosters, key=lambda x: x.get("roster_id", 0)):
+        if r.get("owner_id") == ctx.my_user_id:
+            continue
+        used = int((r.get("settings") or {}).get("waiver_budget_used") or 0)
+        strengths, holes = [], []
+        for pos in ("QB", "RB", "WR", "TE"):
+            vals = sorted(
+                (
+                    (ctx.player_values.get(pid) or {}).get("base_score", 0.0)
+                    for pid in (r.get("players") or [])
+                    if (ctx.players.get(pid) or {}).get("position") == pos
+                ),
+                reverse=True,
+            )
+            need = depth.get(pos, 1)
+            if len(vals) < need or (vals and vals[need - 1] < 15):
+                holes.append(pos)
+            elif len(vals) > need and vals[need] >= 40:
+                # A quality starter sitting on their bench is trade surplus.
+                strengths.append(pos)
+        bits = []
+        if strengths:
+            bits.append(f"surplus {'/'.join(strengths)}")
+        if holes:
+            bits.append(f"needs {'/'.join(holes)}")
+        lines.append(
+            f"  {ctx.team_name(r.get('owner_id', ''))}: "
+            + (", ".join(bits) if bits else "balanced")
+            + f" · ${ctx.faab_total - used} FAAB"
+        )
+    return "\n".join(lines)
