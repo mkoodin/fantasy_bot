@@ -35,6 +35,9 @@ trades / lineup optimization auto-upgrade to the flagship model.
 | `/drops` | Droppable players on your roster |
 | `/roster` | Your team by position (injuries flagged) |
 | `/needs` | Where your roster is thin |
+| `/log` | Record a move you made, and what you expected |
+| `/journal` | Review recent decisions |
+| `/review` | Score past calls against what actually happened |
 | `/usage` | Whose role grew or shrank, and where points lag the role |
 | `/stash` | Who is one injury away from starter value |
 | `/bench` | Why do I own each bench player |
@@ -134,6 +137,28 @@ Monday answer should not read like a Sunday answer.
 | **Fri** | Practice-report trajectory (DNP→LP→FP is a different player from FP→LP→DNP), and the 2–4 week plan. |
 | **Sat** | Bench audit — every spot needs a reason. Take the free options on questionable starters. |
 | **Sun** | Information war: inactives, beat reporters, weather, O-line. Early games lock first, so preserve late flexibility. |
+
+## The decision journal
+
+Every meaningful call is written down with the information available when it
+was made — the brief's recommendations and every `/tradecheck` automatically,
+your own moves via `/log` — and scored later against what actually happened.
+
+The point is to separate **decision quality from outcome quality**. Adding a
+backup back before the starter got hurt was a good decision even if the starter
+stayed healthy. Starting a receiver who caught a 75-yard touchdown after you
+projected him two targets was a bad one that happened to pay. A system that
+learns only from fantasy points becomes results-oriented, and results-oriented
+gets steadily worse.
+
+`/review` pulls decisions from completed weeks, attaches the real box score,
+and shows expected against actual side by side rather than collapsing them.
+
+Storage is a single JSON file written atomically, bounded at 500 entries, and
+resilient to a corrupt or missing file. **Set `JOURNAL_PATH` to a mounted
+Railway volume** — the default `/data/journal.json` assumes one. Anywhere
+inside the app directory is wiped on redeploy, and `/diag` reports which of the
+two you have rather than pretending the writes are durable.
 
 ## What it's optimizing for
 
@@ -286,6 +311,7 @@ bot/
   sleeper.py         Sleeper API client + player cache
   analysis.py        league context, needs, FAAB bids, drops
   valuation.py       value over replacement, roster tiers, trade math
+  journal.py         durable decision log, scored for process not outcome
   prompting.py       question classification + the analysis directives
   grok.py            xAI Grok Live Search over X + news
   digest.py          pre/post-waiver + gameday digest builders

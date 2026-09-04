@@ -22,10 +22,22 @@ from telegram.ext import (
     filters,
 )
 
-from . import analysis, config, digest, grok, prompting, valuation
+from . import analysis, config, digest, grok, journal, prompting, valuation
 from .sleeper import SleeperClient, is_out, player_name
 
 logger = logging.getLogger("fantasy_bot")
+
+
+def projected_points_of(row: dict):
+    """Actual fantasy points from a stats row, for scoring past decisions."""
+    stats = row.get("stats") if isinstance(row.get("stats"), dict) else row
+    if not isinstance(stats, dict):
+        return None
+    for k in ("pts_ppr", "pts_half_ppr", "pts_std"):
+        v = stats.get(k)
+        if isinstance(v, (int, float)):
+            return round(float(v), 1)
+    return None
 
 # Shared across all handlers/jobs for the process lifetime.
 client = SleeperClient()
@@ -38,6 +50,9 @@ HELP_TEXT = (
     "<b>/drops</b> — droppable players on your roster\n"
     "<b>/roster</b> — your team, grouped by position (injuries flagged)\n"
     "<b>/needs</b> — where your roster is thin\n"
+    "<b>/log</b> — record a move you made (and what you expected)\n"
+    "<b>/journal</b> — review recent decisions\n"
+    "<b>/review</b> — score past calls against what actually happened\n"
     "<b>/usage</b> — whose role grew or shrank, and where points lag the role\n"
     "<b>/stash</b> — who is one injury away from starter value\n"
     "<b>/bench</b> — why do I own each bench player\n"
@@ -400,6 +415,18 @@ async def cmd_tradecheck(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         "the raw price only; ask me about the trade for the live injury, role "
         "and expert read on top.</i>"
     )
+    if config.JOURNAL_ENABLED:
+        journal.record(
+            "tradecheck",
+            ctx.week,
+            f"{', '.join(r['send'])} → {', '.join(r['receive'])}",
+            rationale=r["verdict"],
+            expected=f"value gap {r['gap_pct']:+.1f}% ({r['send_value']} vs {r['receive_value']})",
+            players=[
+                player_name(ctx.players.get(p) or {}) for p in send_ids + recv_ids
+            ],
+            data={"gap_pct": r["gap_pct"], "verdict": r["verdict"]},
+        )
     await _send(update, "\n".join(lines))
 
 
@@ -444,6 +471,108 @@ async def cmd_plan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "position going thin, a streaming slot with no plan? What should I "
         "acquire NOW while it is cheap rather than the week I need it?",
         deep=True)
+
+
+@authorized_only
+async def cmd_log(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Record a move you actually made: /log added X, dropped Y, $18."""
+    text = " ".join(context.args).strip() if context.args else ""
+    if not text:
+        await _send(
+            update,
+            "Usage: <code>/log added Kaelon Black, dropped Doubs, $18</code>\n"
+            "Add <code>| expected: ...</code> to record what you thought would "
+            "happen — that's the part that makes a later review about process.",
+        )
+        return
+    expected = ""
+    if "| expected:" in text:
+        text, expected = (x.strip() for x in text.split("| expected:", 1))
+    try:
+        ctx = await _ctx()
+        week = ctx.week
+    except Exception:
+        week = 0
+    ok = journal.record("manual", week, text, expected=expected)
+    note = "" if ok else "\n⚠️ <i>Could not write the journal — check JOURNAL_PATH.</i>"
+    await _send(update, f"📓 Logged for Week {week}.{note}")
+
+
+@authorized_only
+async def cmd_journal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Review recent decisions: /journal [count]."""
+    try:
+        limit = int(context.args[0]) if context.args else 8
+    except (ValueError, IndexError):
+        limit = 8
+    entries = journal.recent(max(1, min(limit, 25)))
+    if not entries:
+        writable, note = journal.available()
+        await _send(
+            update,
+            "📓 No decisions recorded yet."
+            + ("" if writable else f"\n⚠️ Journal is {digest.esc(note)}."),
+        )
+        return
+    await _send(update, "📓 <b>Decision journal</b>\n\n" + journal.summarize(entries))
+
+
+@authorized_only
+async def cmd_review(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Score past decisions against what actually happened: /review."""
+    await _typing(update)
+    try:
+        ctx = await _ctx()
+    except Exception as exc:
+        await _send(update, f"⚠️ Couldn't load your league: <code>{digest.esc(exc)}</code>")
+        return
+
+    pending = journal.unscored(ctx.week)
+    if not pending:
+        await _send(
+            update,
+            "📓 Nothing to review — no decisions from completed weeks are "
+            "waiting on an outcome.",
+        )
+        return
+
+    # Attach what actually happened, then judge the process rather than the
+    # result: a sound call that didn't pay is still a sound call.
+    lines = []
+    for e in pending[-6:]:
+        wk = int(e.get("week") or 0)
+        scored = []
+        for name in e.get("players", [])[:4]:
+            pid = valuation.find_player(ctx, name)
+            if not pid:
+                continue
+            try:
+                rows = await client.get_stats(ctx.season, wk)
+            except Exception:
+                rows = []
+            pts = next(
+                (
+                    projected_points_of(r)
+                    for r in rows
+                    if str(r.get("player_id")) == pid
+                ),
+                None,
+            )
+            if pts is not None:
+                scored.append(f"{name} {pts}pts in W{wk}")
+        outcome = "; ".join(scored) if scored else "no box score found"
+        journal.score(e["ts"], outcome)
+        lines.append(
+            f"<b>W{wk} · {e.get('kind')}</b> — {digest.esc(e.get('summary',''))}\n"
+            f"   <i>expected: {digest.esc(e.get('expected') or 'not recorded')}</i>\n"
+            f"   <i>actual: {digest.esc(outcome)}</i>"
+        )
+    await _send(
+        update,
+        "📓 <b>Review</b>\n\n" + "\n\n".join(lines)
+        + "\n\n<i>Judge the process, not the result. A sound call that didn't "
+        "pay is still sound; a lucky one is still lucky.</i>",
+    )
 
 
 @authorized_only
@@ -502,6 +631,12 @@ async def cmd_diag(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         lines.append(
             f"Valuation: {yn(ctx.player_values)} ({len(ctx.player_values)} "
             "players priced)"
+        )
+        lines.append(f"Usage/participation: {yn(ctx.usage)} ({len(ctx.usage)} players)")
+        writable, note = journal.available()
+        lines.append(
+            f"Journal: {yn(writable)} <i>{digest.esc(note)}</i> "
+            f"({len(journal.recent(999))} entries)"
         )
         if ranks:
             # Shown as ranks because those are checkable by eye — but the
@@ -832,6 +967,23 @@ async def _push_brief(context: ContextTypes.DEFAULT_TYPE, kind: str) -> None:
             return
         body = f"{header}\n<i>{digest.esc(ctx.league.get('name',''))} · Week {ctx.week}</i>\n\n"
         await _push(context, body + digest.esc(text))
+        # Record what was advised and on what basis, so it can be reviewed
+        # later for process rather than judged on the scoreboard.
+        if config.JOURNAL_ENABLED:
+            movers = [
+                player_name(ctx.players.get(pid) or {})
+                for pid, u in list(ctx.usage.items())[:200]
+                if (u.get("snap_delta") or 0) >= 8
+            ][:6]
+            journal.record(
+                f"brief:{kind}",
+                ctx.week,
+                text.split(". ")[0][:200],
+                rationale=text[:800],
+                expected="see recommendation",
+                players=movers,
+                data={"usage_movers": movers, "has_usage": bool(ctx.usage)},
+            )
     except Exception as exc:
         logger.exception("%s brief failed", kind)
         await _push(
@@ -964,6 +1116,9 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("roster", cmd_roster))
     app.add_handler(CommandHandler("trending", cmd_trending))
     app.add_handler(CommandHandler("news", cmd_news))
+    app.add_handler(CommandHandler("review", cmd_review))
+    app.add_handler(CommandHandler("journal", cmd_journal))
+    app.add_handler(CommandHandler("log", cmd_log))
     app.add_handler(CommandHandler("plan", cmd_plan))
     app.add_handler(CommandHandler("bench", cmd_bench))
     app.add_handler(CommandHandler("stash", cmd_stash))

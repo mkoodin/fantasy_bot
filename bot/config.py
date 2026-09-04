@@ -201,6 +201,13 @@ SCOUT_BRIEF_TIME = _parse_time(os.getenv("SCOUT_BRIEF_TIME", ""), "21:30")
 # PRE_DIGEST_ENABLED=true to bring it back.
 PRE_DIGEST_ENABLED = _flag("PRE_DIGEST_ENABLED", "false")
 
+# --- Decision journal -------------------------------------------------------
+# Where decisions are written so they can be reviewed later for process rather
+# than outcome. On Railway this should point at a mounted volume; anywhere
+# inside the app directory is wiped on redeploy, and /diag says which it is.
+JOURNAL_PATH = os.getenv("JOURNAL_PATH", "/data/journal.json")
+JOURNAL_ENABLED = _flag("JOURNAL_ENABLED")
+
 # How long (seconds) to reuse cached league data across commands.
 CONTEXT_TTL = int(os.getenv("CONTEXT_TTL", "300"))
 
