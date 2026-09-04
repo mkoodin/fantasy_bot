@@ -126,13 +126,32 @@ async def _faab_block(ctx: analysis.LeagueContext, client: SleeperClient) -> str
     lines = ["\n<b>🎯 Waiver targets & FAAB bids:</b>"]
     for r in recs:
         p = r["player"]
-        star = "⭐" if r["fills_need"] else "•"
-        lines.append(
-            f"{star} <b>{esc(player_name(p))}</b> ({esc(_pos_tag(p))}) — "
-            f"bid <b>${r['bid']}–${r['bid_high']}</b> "
-            f"(~{r['pct']}% budget)\n"
+        # The star marks a real starting upgrade, not merely a thin position:
+        # flagging a "need" the player wouldn't actually start for is noise.
+        star = "⭐" if r["upgrade"] > 0 else "•"
+        if r["bid"] == 0:
+            price = "<b>free add / $1 claim</b>"
+        else:
+            price = f"bid <b>${r['bid']}–${r['bid_high']}</b> (~{r['pct']}% budget)"
+        line = (
+            f"{star} <b>{esc(player_name(p))}</b> ({esc(_pos_tag(p))}) — {price}\n"
             f"   <i>{esc(r['reason'])}</i>"
         )
+        drop_pid = r.get("drop_player_id")
+        if drop_pid:
+            dropped = ctx.players.get(drop_pid) or {}
+            if r.get("beats_drop"):
+                line += (
+                    f"\n   ↳ <i>drop {esc(player_name(dropped))} "
+                    f"({r['drop_value']}) for him ({r['add_value']})</i>"
+                )
+            else:
+                line += (
+                    f"\n   ↳ <i>SKIP — worse than {esc(player_name(dropped))} "
+                    f"({r['add_value']} vs {r['drop_value']}), your own worst "
+                    "rosterable player</i>"
+                )
+        lines.append(line)
     return "\n".join(lines) + "\n"
 
 

@@ -550,3 +550,56 @@ def replacement_ranks(ctx: Any) -> dict[str, int]:
         if idx:
             out[pos] = idx
     return out
+
+
+def worst_rosterable(ctx: Any) -> Optional[tuple[str, float]]:
+    """The player you would actually drop to make room, and his value.
+
+    A waiver add is only worth making if it beats the man it displaces on the
+    roster — not the abstract replacement level. Returns None when there is
+    nobody droppable, which means any add costs you a real player.
+    """
+    candidates = []
+    for pid in ctx.my_roster.get("players") or []:
+        if pid in set(ctx.my_roster.get("reserve") or []):
+            continue
+        tier = ctx.roster_tiers.get(pid)
+        if tier in ("CORE", "STARTER"):
+            continue
+        score = (ctx.player_values.get(pid) or {}).get("base_score", 0.0)
+        candidates.append((score, pid))
+    if not candidates:
+        return None
+    score, pid = min(candidates)
+    return pid, score
+
+
+def competing_teams(ctx: Any, position: str, candidate_value: float) -> list[str]:
+    """Rival teams this player would actually upgrade, who can still bid.
+
+    Bid pressure is not "who is thin at the position" — every team is thin
+    somewhere. It is who would put this specific player in their starting
+    lineup, which is the same upgrade test applied to their roster instead of
+    yours. A team already starting better players will not spend on him.
+    """
+    depth = starter_depth(ctx).get(position, 1)
+    out: list[str] = []
+    for r in ctx.rosters:
+        if r.get("owner_id") == ctx.my_user_id:
+            continue
+        used = int((r.get("settings") or {}).get("waiver_budget_used") or 0)
+        if ctx.faab_total - used <= 0:
+            continue
+        owned = sorted(
+            (
+                (ctx.player_values.get(pid) or {}).get("score", 0.0)
+                for pid in (r.get("players") or [])
+                if (ctx.players.get(pid) or {}).get("position") == position
+            ),
+            reverse=True,
+        )
+        # The player he would displace in their lineup; 0 if they can't fill it.
+        theirs = owned[depth - 1] if len(owned) >= depth else 0.0
+        if candidate_value > theirs:
+            out.append(ctx.team_name(r.get("owner_id", "")))
+    return out

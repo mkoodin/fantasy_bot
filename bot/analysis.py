@@ -970,65 +970,88 @@ async def hot_free_agents(
 
 
 def suggest_faab_bid(ctx: LeagueContext, candidate: dict, max_adds: int) -> dict:
-    """Turn a free-agent candidate into a concrete bid, as % of remaining FAAB.
+    """Turn a free-agent candidate into a concrete bid.
 
-    The two inputs answer different questions and must not be conflated:
+    Three inputs, each answering a different question:
 
-      upgrade    = how much this player improves YOUR starting lineup, in value
-                   points. This sets what he is WORTH to you, and therefore the
-                   ceiling of the bid.
-      add volume = how many managers league-wide are chasing him. This is
-                   COMPETITION, not worth: it decides where inside that ceiling
-                   to bid, so you pay up only when someone else might take him.
+      upgrade    = how much he improves your STARTING lineup over the player
+                   he'd displace. Sets what he is worth, and so the ceiling.
+      rivals     = how many other teams have a hole at his position AND budget
+                   left. Sets how much of that ceiling you actually have to
+                   spend; with nobody bidding, the right price is the minimum.
+      add volume = league-wide market interest, used only as a tiebreak.
 
-    Sizing the bid off velocity alone is how a hot name who would never crack
-    your lineup outbids the quiet player who would start immediately.
+    Bids are computed in dollars against the real budget. An earlier version
+    worked in percentages with a flat additive spread, which produced a $19-79
+    range on a $1000 budget while claiming "2%".
     """
     remaining = ctx.faab_remaining
-    upgrade = valuation.upgrade_over_roster(ctx, candidate["player_id"])
-    priced = bool(ctx.player_values.get(candidate["player_id"]))
-
-    # A ~40-point value upgrade is a season-changing add; scale worth to that.
-    worth = min(1.0, max(0.0, upgrade / 40.0))
-    base_pct = 0.02 + 0.45 * worth
-    if candidate["fills_need"]:
-        base_pct *= 1.15
-
-    # Competition moves the bid within its ceiling, roughly 0.6x to 1.1x.
+    pid = candidate["player_id"]
+    upgrade = valuation.upgrade_over_roster(ctx, pid)
+    priced = bool(ctx.player_values.get(pid))
+    add_value_for_rivals = (ctx.player_values.get(pid) or {}).get("score", 0.0)
+    rivals = valuation.competing_teams(
+        ctx, candidate["position"], add_value_for_rivals
+    )
     comp = (candidate["adds"] / max_adds) if max_adds else 0.0
-    bid_pct = base_pct * (0.6 + 0.5 * comp)
 
-    if priced and upgrade <= 0:
-        # A stash is worth a few dollars, not a bidding war, however hot he is.
-        bid_pct = min(bid_pct, 0.12)
-    elif not priced:
-        # Unpriced (K/DEF, or no value data): fall back to pure market signal.
-        bid_pct = 0.03 + 0.25 * comp
+    # What he is worth to this roster, as a share of the budget.
+    worth = min(1.0, max(0.0, upgrade / 40.0))
+    ceiling_pct = 0.02 + 0.45 * worth
 
-    bid_pct = min(0.55, max(0.01, bid_pct))
-    bid = max(1, round(remaining * bid_pct))
-    bid_high = max(bid, round(remaining * min(0.6, bid_pct + 0.06)))
+    # How much of that you must actually pay. Nobody competing means minimum.
+    pressure = min(1.0, len(rivals) / 4.0) * 0.75 + 0.25 * comp
+    bid_pct = ceiling_pct * (0.25 + 0.75 * pressure)
 
-    reason_bits = [f"{candidate['adds']:,} adds/48h"]
-    if candidate["fills_need"]:
-        reason_bits.append(f"fills {candidate['position']} need")
     if not priced:
-        reason_bits.append("market signal only")
-    elif upgrade >= 15:
-        reason_bits.append(f"big starting upgrade (+{upgrade})")
-    elif upgrade > 0:
-        reason_bits.append(f"modest upgrade (+{upgrade})")
+        # K/DEF and anyone unpriced: streaming fodder, never a budget item.
+        bid_pct = min(bid_pct, 0.01)
+
+    bid = int(round(remaining * bid_pct))
+    if upgrade <= 0 or not priced:
+        # He would not crack your lineup. Undrafted players are usually free
+        # adds; if he is on waivers a token claim wins him. Either way this is
+        # not a budget decision.
+        bid, bid_high = 0, 1
     else:
-        reason_bits.append("bench/stash — wouldn't start for you")
-    if comp >= 0.5 and upgrade > 0:
-        reason_bits.append("heavily contested — bid the high end")
+        bid = max(1, bid)
+        # Range scales with the bid itself, so it stays sane on any budget.
+        bid_high = max(bid + 1, int(round(bid * 1.6)))
+    bid = min(bid, remaining)
+    bid_high = min(bid_high, remaining)
+
+    drop = valuation.worst_rosterable(ctx)
+    drop_pid, drop_value = drop if drop else (None, 0.0)
+    add_value = (ctx.player_values.get(pid) or {}).get("base_score", 0.0)
+    beats_drop = drop_pid is not None and add_value > drop_value
+
+    reason_bits: list[str] = []
+    if upgrade > 0:
+        reason_bits.append(f"upgrades your lineup by {upgrade:+}")
+    elif priced:
+        reason_bits.append("wouldn't crack your lineup — stash only")
+    else:
+        reason_bits.append("streaming option, not a budget item")
+    if rivals:
+        reason_bits.append(
+            f"{len(rivals)} rival(s) need {candidate['position']} and can bid"
+            + (f" ({', '.join(rivals[:3])})" if len(rivals) <= 3 else "")
+        )
+    else:
+        reason_bits.append("no rival needs this position — minimum bid wins")
+    reason_bits.append(f"{candidate['adds']:,} adds/48h")
 
     return {
         "bid": bid,
         "bid_high": bid_high,
-        "pct": round(bid_pct * 100),
+        "pct": round(100.0 * bid / remaining) if remaining else 0,
         "upgrade": upgrade,
-        "reason": ", ".join(reason_bits),
+        "add_value": add_value,
+        "drop_player_id": drop_pid,
+        "drop_value": drop_value,
+        "beats_drop": beats_drop,
+        "rivals": rivals,
+        "reason": "; ".join(reason_bits),
     }
 
 
@@ -1037,7 +1060,7 @@ async def faab_recommendations(
 ) -> list[dict]:
     """Ranked pickup list with concrete bids. Each entry merges the hot-FA
     candidate with its suggested bid."""
-    candidates = await hot_free_agents(ctx, client, limit=limit)
+    candidates = await hot_free_agents(ctx, client, limit=limit * 3)
     if not candidates:
         return []
     max_adds = max(c["adds"] for c in candidates)
@@ -1045,7 +1068,11 @@ async def faab_recommendations(
     for c in candidates:
         bid = suggest_faab_bid(ctx, c, max_adds)
         recs.append({**c, **bid})
-    return recs
+    # Lead with what actually improves the lineup. A hot name who is worse
+    # than the player you'd cut for him is not a waiver target, so he sorts
+    # last and carries the comparison that says why.
+    recs.sort(key=lambda r: (r["upgrade"], r["beats_drop"], r["adds"]), reverse=True)
+    return recs[:limit]
 
 
 # --- Drop candidates --------------------------------------------------------
@@ -1068,6 +1095,8 @@ async def drop_candidates(
             depth_rank[p["player_id"]] = i
 
     required = required_starters(ctx)
+    starters, _ = valuation.optimal_lineup(ctx)
+    starting_ids = {e["player_id"] for e in starters if e.get("player_id")}
     st = ctx.league.get("settings") or {}
     ir_total = int(st.get("reserve_slots") or 0)
     on_ir = set(ctx.my_roster.get("reserve") or [])
@@ -1091,6 +1120,11 @@ async def drop_candidates(
             continue
         if pid in on_ir:
             continue  # Already stashed — not occupying a bench spot.
+        if pid in starting_ids:
+            # Season-long value can rate a weekly starter as replaceable.
+            # Telling you to start a man and cut him in the same breath is
+            # incoherent, so this week's lineup wins.
+            continue
         pos = p.get("position") or "?"
         score = 0.0
         reasons = []

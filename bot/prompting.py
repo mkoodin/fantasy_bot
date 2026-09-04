@@ -158,10 +158,15 @@ WAIVER_DIRECTIVE = (
     "with a positive upgrade starts immediately. When the two lists disagree, "
     "say which you believe and why; heavy adds usually mean news broke, so "
     "check what it was before dismissing it. Size FAAB bids to what the player "
-    "is worth to MY lineup, then adjust for who can outbid me — name the "
-    "rivals with both budget and a hole at that position. Say who to drop, and "
-    "confirm the drop is DEPTH or EXPENDABLE; never a CORE player, and never "
-    "an injured starter worth stashing.]"
+    "is worth to MY lineup, and check the rival demand given: if no other team "
+    "would start him, the minimum bid wins and saying otherwise wastes my "
+    "budget. Many unrostered players are free adds costing nothing — say so "
+    "rather than inventing a price. EVERY add must name the specific player "
+    "it displaces and why that trade-up is worth it; if the best available "
+    "free agent is worse than my own worst bench player, the correct answer "
+    "is to stand pat, and say that plainly instead of manufacturing a target. "
+    "Never suggest dropping a CORE player, a starter in this week's lineup, "
+    "or an injured starter worth stashing on IR.]"
 )
 
 

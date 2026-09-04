@@ -108,10 +108,19 @@ scheduled digests. No Railway Cron needed; the scheduler is internal.
   the difference between his value and the player he'd displace — so a quiet
   free agent who'd start immediately outranks a hot name who'd sit. Add volume
   is kept as a separate signal, since a surge usually means news broke.
-- **FAAB bids** separate worth from competition. Upgrade sets the ceiling of
-  what a player is worth to *your* roster; add volume only decides where inside
-  that ceiling to bid, so you pay up when someone might outbid you. Sizing off
-  velocity alone is how a hot bust outbids the player who'd actually start.
+- **FAAB bids** are computed in dollars against your real budget, from three
+  separate inputs. *Upgrade over the player he'd displace* sets what he's worth
+  to you and caps the bid. *Rival demand* decides how much of that cap you
+  actually have to spend — and it's measured properly, as the teams whose
+  starting lineup this player would improve, not the teams who look thin. With
+  nobody competing, the minimum wins. *Add volume* is only a tiebreak. A player
+  who wouldn't crack your lineup is priced as a free add or $1 claim, never a
+  budget item.
+- **Every add names its drop.** A pickup is only worth making if it beats the
+  player you'd cut for it, so each recommendation carries that comparison
+  explicitly — and when the best free agent is worse than your own worst bench
+  player, it says SKIP and tells you to stand pat rather than manufacturing a
+  target.
 - **League rules** constrain the advice. The trade deadline, IR slots and what's
   IR-eligible, how long dropped players sit on waivers, and the veto threshold
   all reach the model, so it won't propose a trade after the deadline or tell
