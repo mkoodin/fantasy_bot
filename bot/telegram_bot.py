@@ -72,9 +72,18 @@ def authorized_only(func):
 # --- Helpers ----------------------------------------------------------------
 async def _send(update: Update, text: str) -> None:
     for chunk in digest.split_for_telegram(text):
-        await update.effective_chat.send_message(
-            chunk, parse_mode=ParseMode.HTML, disable_web_page_preview=True
-        )
+        try:
+            await update.effective_chat.send_message(
+                chunk, parse_mode=ParseMode.HTML, disable_web_page_preview=True
+            )
+        except Exception:
+            # A single malformed tag makes Telegram reject the whole message.
+            # Losing the formatting beats losing the answer, so retry as plain
+            # text before letting the error handler swallow it.
+            logger.warning("HTML send failed; retrying as plain text", exc_info=True)
+            await update.effective_chat.send_message(
+                chunk, disable_web_page_preview=True
+            )
 
 
 async def _typing(update: Update) -> None:

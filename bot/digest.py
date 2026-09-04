@@ -26,19 +26,61 @@ def _pos_tag(p: dict) -> str:
     return tag
 
 
+def _split_long_line(line: str) -> list[str]:
+    """Break a single over-long line into pieces that each fit the cap.
+
+    Grok is instructed to write unbroken prose with no headers or markdown, so
+    a long answer routinely arrives as one paragraph with no newline to split
+    on. Splits on spaces where possible; a single token longer than the cap
+    (a pathological URL) is cut mid-word because nothing else can be done.
+    """
+    out: list[str] = []
+    current = ""
+    for word in line.split(" "):
+        while len(word) > TELEGRAM_LIMIT:
+            if current:
+                out.append(current)
+                current = ""
+            out.append(word[:TELEGRAM_LIMIT])
+            word = word[TELEGRAM_LIMIT:]
+        candidate = f"{current} {word}" if current else word
+        if len(candidate) > TELEGRAM_LIMIT:
+            out.append(current)
+            current = word
+        else:
+            current = candidate
+    if current:
+        out.append(current)
+    return out
+
+
 def split_for_telegram(text: str) -> list[str]:
-    """Split a long message on line boundaries to fit Telegram's 4096 cap."""
+    """Split a message into parts that each fit Telegram's 4096-char cap.
+
+    Splits on line boundaries where it can and inside a line where it must.
+    Never emits an empty part: Telegram rejects an empty message outright,
+    which reaches the user as an unexplained failure rather than a long answer.
+    """
+    if not text.strip():
+        return []
     if len(text) <= TELEGRAM_LIMIT:
         return [text]
-    chunks, current = [], ""
+
+    chunks: list[str] = []
+    current = ""
     for line in text.split("\n"):
-        if len(current) + len(line) + 1 > TELEGRAM_LIMIT:
-            chunks.append(current)
-            current = ""
-        current += line + "\n"
+        pieces = _split_long_line(line) if len(line) > TELEGRAM_LIMIT else [line]
+        for piece in pieces:
+            candidate = f"{current}\n{piece}" if current else piece
+            if len(candidate) > TELEGRAM_LIMIT:
+                if current:
+                    chunks.append(current)
+                current = piece
+            else:
+                current = candidate
     if current:
         chunks.append(current)
-    return chunks
+    return [c for c in chunks if c.strip()]
 
 
 def _offseason_note(ctx: analysis.LeagueContext) -> str:

@@ -13,6 +13,7 @@ Docs: https://docs.x.ai/docs/guides/tools/overview
 """
 
 import asyncio
+import logging
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -20,6 +21,8 @@ from typing import Optional
 import requests
 
 from . import config, prompting
+
+logger = logging.getLogger("fantasy_bot")
 
 # Matches markdown links: [text](url) and citation forms like [[1]](url).
 _MD_LINK = re.compile(r"\[+([^\]]*)\]+\((https?://[^)]+)\)")
@@ -240,8 +243,19 @@ async def _run(
                 "citations": [],
             }
         return {"text": f"⚠️ Grok lookup failed: {exc}", "citations": []}
-    text = _clean(_extract_text(data)) or "No usable response from Grok."
-    return {"text": text, "citations": _extract_citations(data)}
+    # Parsing runs outside the request try/except above, so guard it too: an
+    # unexpected payload shape must not surface as an unexplained failure.
+    try:
+        text = _clean(_extract_text(data)) or "No usable response from Grok."
+        citations = _extract_citations(data)
+    except Exception as exc:
+        logger.warning("Could not parse xAI response: %s", exc)
+        return {
+            "text": "⚠️ Grok returned a response I couldn't read. Try asking "
+            "again, or narrow the question.",
+            "citations": [],
+        }
+    return {"text": text, "citations": citations}
 
 
 async def analyze_player(
