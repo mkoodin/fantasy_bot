@@ -135,6 +135,26 @@ Monday answer should not read like a Sunday answer.
 | **Sat** | Bench audit — every spot needs a reason. Take the free options on questionable starters. |
 | **Sun** | Information war: inactives, beat reporters, weather, O-line. Early games lock first, so preserve late flexibility. |
 
+## What it's optimizing for
+
+Not "most projected points this week" — that's the right objective almost
+never. The bot reads the standings and states the objective the season
+situation actually calls for, and every answer is held to it:
+
+| Situation | Objective |
+|---|---|
+| First few weeks | Grow roster value. Buy ascending roles; unspent FAAB in Week 17 was wasted. |
+| Comfortably in | Weight the playoff weeks — schedules, insurance on the players the run depends on, ceiling over floor. |
+| On the bubble | Qualifying comes first. Favor floor; you can't win a title you miss the playoffs for. |
+| Chasing | Every week must-win. Take the higher ceiling on close calls. |
+| Games back with games to play | Maximise variance. Playing for the median is pointless; spend what's left. |
+
+Two related guards. **Signal conflicts** are surfaced rather than averaged —
+when usage says starter and the market says depth, that disagreement is where
+the opportunity is, and quietly splitting the difference hides it. **Data
+confidence** reports which feeds failed to load, so a missing input is treated
+as unknown rather than as zero.
+
 ## How the numbers are decided
 
 - **FAAB bids** are a percentage of your *remaining* budget, scaled by a

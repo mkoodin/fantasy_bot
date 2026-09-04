@@ -1004,6 +1004,181 @@ def bye_outlook_context(ctx: LeagueContext) -> str:
     return "\n".join(lines)
 
 
+def standings_context(ctx: LeagueContext) -> str:
+    """Where this team stands, and what that means the objective IS.
+
+    The single most consequential thing missing from a rankings-style
+    assistant: the right move depends on the season situation, not only on the
+    players. A 1-5 team and a 5-1 team facing the same waiver claim should
+    often do different things, and "maximise projected points this week" is the
+    correct objective for neither. Read from the league's own records so the
+    objective changes as the season does.
+    """
+    rows = []
+    for r in ctx.rosters:
+        st = r.get("settings") or {}
+        wins = int(st.get("wins") or 0)
+        losses = int(st.get("losses") or 0)
+        ties = int(st.get("ties") or 0)
+        pf = float(st.get("fpts") or 0) + float(st.get("fpts_decimal") or 0) / 100
+        rows.append((wins, pf, losses, ties, r))
+    if not any(w or l for w, _, l, _, _ in rows):
+        return ""  # Preseason or week 1 — no records to reason from yet.
+
+    rows.sort(key=lambda x: (x[0], x[1]), reverse=True)
+    playoff_teams = int((ctx.league.get("settings") or {}).get("playoff_teams") or 6)
+
+    lines = ["STANDINGS — record, points for, and playoff position:"]
+    my_rank = my_row = None
+    for i, (wins, pf, losses, ties, r) in enumerate(rows, 1):
+        mine = r.get("owner_id") == ctx.my_user_id
+        if mine:
+            my_rank, my_row = i, (wins, losses, ties, pf)
+        cut = " ← playoff cut" if i == playoff_teams else ""
+        lines.append(
+            f"  {i}. {ctx.team_name(r.get('owner_id',''))}"
+            f"{' (YOU)' if mine else ''}: {wins}-{losses}"
+            + (f"-{ties}" if ties else "")
+            + f", {pf:.1f} PF{cut}"
+        )
+
+    if my_rank is None:
+        return "\n".join(lines)
+
+    wins, losses, ties, _ = my_row
+    played = wins + losses + ties
+    total_weeks = int((ctx.league.get("settings") or {}).get("playoff_week_start") or 15) - 1
+    left = max(0, total_weeks - played)
+    in_hunt = my_rank <= playoff_teams
+
+    # How far back the cut line actually is, which is the question — not how
+    # many weeks remain. A team twelfth of twelve in week 9 is not "on the
+    # bubble" just because six games are left.
+    cut_wins = rows[min(playoff_teams, len(rows)) - 1][0]
+    deficit = max(0, cut_wins - wins)
+    # Leader's margin over the cut, for judging whether a spot is genuinely safe.
+    cushion = wins - cut_wins
+
+    if left <= 0:
+        obj = (
+            "PLAYOFFS OR OVER. Only championship-relevant value counts now: "
+            "players who can enter the lineup in the remaining weeks. "
+            "Rest-of-season upside beyond this run is worth nothing."
+        )
+    elif played <= 3:
+        obj = (
+            "EARLY SEASON. The objective is to GROW roster value, not to "
+            "squeeze out this week's last projected point. Buy ascending roles "
+            "and upside aggressively — there are many weeks left to collect the "
+            "return, and FAAB kept unspent to Week 17 was wasted."
+        )
+    elif not in_hunt and deficit >= left:
+        obj = (
+            f"EFFECTIVELY OUT ({my_rank} of {len(rows)}, {deficit} games back "
+            f"of the cut with {left} to play). Playing for the median is "
+            "pointless from here. Maximise variance: ceiling over floor, "
+            "boom-or-bust over safe, and spend whatever budget is left, since "
+            "hoarding it has no payoff."
+        )
+    elif not in_hunt:
+        obj = (
+            f"CHASING ({my_rank} of {len(rows)}, {deficit} back with {left} to "
+            "play). Still live, but every week is must-win. Take the higher "
+            "ceiling on close calls and stop preserving assets whose value "
+            "arrives after the season is decided."
+        )
+    elif cushion >= 2 and left <= 6:
+        obj = (
+            f"COMFORTABLE ({my_rank} of {len(rows)}, {cushion} games clear of "
+            "the cut). Qualifying is likely, so shift weight toward the fantasy "
+            "playoff weeks: playoff schedules, insurance for the players the "
+            "run depends on, and ceiling over weekly floor. Do not spend to win "
+            "a regular-season week by more."
+        )
+    else:
+        obj = (
+            f"ON THE BUBBLE ({my_rank} of {len(rows)}, {left} weeks left). "
+            "Qualifying comes first — you cannot win a title you miss the "
+            "playoffs for. Favor reliable weekly floor over speculative upside, "
+            "and treat every week as close to must-win."
+        )
+    lines.append(f"  YOUR OBJECTIVE RIGHT NOW: {obj}")
+    return "\n".join(lines)
+
+
+def data_confidence_context(ctx: LeagueContext) -> str:
+    """Which inputs actually loaded, so the answer can be hedged honestly.
+
+    Missing data is not zero data. When the usage feed is dark, the right
+    response is to say so and lean on the other signals — not to reason as
+    though every player suddenly has no role.
+    """
+    have = {
+        "market ranks": bool(ctx.market_ranks),
+        "season projections": bool(ctx.season_projections),
+        "this week's projections": bool(ctx.week_projections),
+        "usage/participation": bool(ctx.usage),
+        "draft capital": bool(ctx.draft_picks),
+        "bye outlook": bool(ctx.upcoming_byes),
+    }
+    missing = [k for k, v in have.items() if not v]
+    if not missing:
+        return ""
+    return (
+        "DATA CONFIDENCE — these inputs did NOT load this run: "
+        + ", ".join(missing)
+        + ". Treat them as UNKNOWN, not as zero or negative: say what you "
+        "cannot see rather than reasoning as if the answer were nil, and lower "
+        "your stated confidence accordingly."
+    )
+
+
+def signal_conflicts_context(ctx: LeagueContext, limit: int = 8) -> str:
+    """Where the independent signals disagree about a player.
+
+    Market rank, season projection and actual usage are separate views. When
+    they agree there is nothing to think about; the opportunities and the traps
+    both live where they diverge, and averaging them silently hides exactly the
+    cases worth a human decision.
+    """
+    if not ctx.usage or not ctx.market_ranks:
+        return ""
+    rows = []
+    for pid, u in ctx.usage.items():
+        snap = u.get("snap_pct")
+        if snap is None:
+            continue
+        p = ctx.players.get(pid) or {}
+        pos = p.get("position") or ""
+        if pos not in valuation.VALUED_POSITIONS:
+            continue
+        ranks = ctx.market_ranks.get(pid)
+        if not ranks:
+            continue
+        pos_rank = ranks[0]
+        # A heavy role the market has not priced, or a priced name barely playing.
+        if snap >= 70 and pos_rank >= 40:
+            rows.append((snap - pos_rank, pid, "usage says starter, market says depth", u, p, pos_rank))
+        elif snap <= 35 and pos_rank <= 24:
+            rows.append((pos_rank - snap, pid, "market says starter, usage says he barely plays", u, p, pos_rank))
+    if not rows:
+        return ""
+    rows.sort(reverse=True)
+    lines = [
+        "SIGNAL CONFLICTS — the independent views disagree on these players. "
+        "Do not average them. Say which one you believe and why, and if the "
+        "evidence is genuinely mixed, say that role certainty is low rather "
+        "than picking a number:"
+    ]
+    for _, pid, why, u, p, pos_rank in rows[:limit]:
+        lines.append(
+            f"  {player_name(p)} ({p.get('position','?')}-{p.get('team','FA')}): "
+            f"{why} — {u['snap_pct']}% snaps vs market "
+            f"{p.get('position','?')}{pos_rank}"
+        )
+    return "\n".join(lines)
+
+
 def league_rules_context(ctx: LeagueContext) -> str:
     """The league's operating rules: deadlines, waiver timing, IR, vetoes.
 
@@ -1080,11 +1255,14 @@ async def full_league_context(ctx: LeagueContext, client: SleeperClient) -> str:
     parts = [
         team_context_summary(ctx),
         scoring_context(ctx),
+        standings_context(ctx),
         league_rules_context(ctx),
         valuation.lineup_context(ctx),
         bye_outlook_context(ctx),
         usage_movers_context(ctx),
         usage_faders_context(ctx),
+        signal_conflicts_context(ctx),
+        data_confidence_context(ctx),
         league_rosters_context(ctx),
         value_board_context(ctx),
         valuation.trade_posture_context(ctx),
