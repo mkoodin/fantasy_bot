@@ -136,21 +136,32 @@ MATCHUP_DIRECTIVE = (
 )
 
 START_SIT_DIRECTIVE = (
-    "\n\n[START/SIT — go slot by slot against my actual roster. Lead with each "
-    "player's projection for THIS week in my scoring, then adjust for matchup, "
-    "injury and role news from your search. Name the close calls explicitly "
-    "and say what would flip them. Distinguish floor from ceiling: if I'm "
-    "favored in this week's matchup lean to floor, if I'm the underdog lean to "
-    "ceiling.]"
+    "\n\n[START/SIT — the context already contains a PROJECTION-OPTIMAL "
+    "LINEUP: every slot filled with the highest-projected eligible player for "
+    "THIS week, injury-discounted. Start from it rather than re-deriving it, "
+    "and spend your search on what it cannot know — snap counts, practice "
+    "reports, weather, defensive matchup, role changes. Go slot by slot; for "
+    "each one either confirm the projected starter or name the swap and the "
+    "specific finding that justifies overriding the number. Resolve the CLOSE "
+    "CALLS the context flags, since those are where news actually changes the "
+    "answer. Distinguish floor from ceiling: if I'm favored this week lean to "
+    "floor, if I'm the underdog lean to ceiling.]"
 )
 
 WAIVER_DIRECTIVE = (
     "\n\n[WAIVERS/FAAB — recommend only players NOT on any roster in the "
-    "context. Justify each add with the value score and projection of the "
-    "player he'd replace on my roster, so a pickup is an upgrade rather than "
-    "churn. Size FAAB bids against rivals' remaining budgets and name which "
-    "teams are likely to compete for him (budget AND a hole at the position). "
-    "Say who to drop, and confirm the drop is EXPENDABLE, not a starter.]"
+    "context. Two lists are provided and they answer different questions: the "
+    "WAIVER WIRE board ranks everyone available by value and states the "
+    "'upgrade' each would give MY starting lineup, while TRENDING ADDS shows "
+    "what the market is chasing. Lead with upgrade, not add volume — a hot "
+    "name with a negative upgrade would sit on my bench, and a quiet player "
+    "with a positive upgrade starts immediately. When the two lists disagree, "
+    "say which you believe and why; heavy adds usually mean news broke, so "
+    "check what it was before dismissing it. Size FAAB bids to what the player "
+    "is worth to MY lineup, then adjust for who can outbid me — name the "
+    "rivals with both budget and a hole at that position. Say who to drop, and "
+    "confirm the drop is DEPTH or EXPENDABLE; never a CORE player, and never "
+    "an injured starter worth stashing.]"
 )
 
 

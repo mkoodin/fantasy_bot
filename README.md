@@ -96,10 +96,28 @@ scheduled digests. No Railway Cron needed; the scheduler is internal.
   positions**: a QB and a RB with the same score are worth the same in a trade,
   and 0 means freely replaceable off waivers. Injuries discount the score;
   designations from Questionable to IR scale it down.
+- **Start/sit** gets a computed **projection-optimal lineup** before the model
+  sees the question: every slot filled with the highest-projected eligible
+  player for that week, injury-discounted, plus the bench players within 3
+  points of a starter flagged as close calls. Slot assignment is optimal, not
+  just greedy — filling fixed slots before flex can't cost a better flex. The
+  model's job is then to override the arithmetic with news, and say what made
+  it deviate.
+- **Waivers** rank by value, not by add volume. The wire board lists every
+  unowned player with the **upgrade** each would give your starting lineup —
+  the difference between his value and the player he'd displace — so a quiet
+  free agent who'd start immediately outranks a hot name who'd sit. Add volume
+  is kept as a separate signal, since a surge usually means news broke.
+- **FAAB bids** separate worth from competition. Upgrade sets the ceiling of
+  what a player is worth to *your* roster; add volume only decides where inside
+  that ceiling to bid, so you pay up when someone might outbid you. Sizing off
+  velocity alone is how a hot bust outbids the player who'd actually start.
 - **Roster fit** decides who's actually available to trade. Every player on your
   team is tiered CORE / STARTER / DEPTH / EXPENDABLE by ranking him within his
   position against how many that slot really starts. Offers get built from
-  DEPTH and EXPENDABLE; sending a CORE player requires showing the math.
+  DEPTH and EXPENDABLE; sending a CORE player requires showing the math. Tiers
+  use *healthy* value on purpose — an injured starter is someone you stash, so
+  he can never be demoted into a drop suggestion by his own injury.
 - **The two-layer process** runs on every question, not just trades. The Sleeper
   layer is the baseline — value score, market rank, projections, and the round
   your league actually paid. The X layer adjusts it: current expert rankings

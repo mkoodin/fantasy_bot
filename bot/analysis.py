@@ -721,9 +721,11 @@ async def full_league_context(ctx: LeagueContext, client: SleeperClient) -> str:
     parts = [
         team_context_summary(ctx),
         scoring_context(ctx),
+        valuation.lineup_context(ctx),
         league_rosters_context(ctx),
         value_board_context(ctx),
         valuation.trade_posture_context(ctx),
+        waiver_board_context(ctx),
         league_faab_context(ctx),
     ]
     fa = await available_fa_context(ctx, client)
@@ -751,12 +753,68 @@ def league_faab_context(ctx: LeagueContext) -> str:
     return "\n".join(lines)
 
 
+def waiver_board_context(ctx: LeagueContext, per_pos: int = 8) -> str:
+    """The best players available in this league, ranked by value.
+
+    The trending list alone can't answer a waiver question: it surfaces who the
+    market is chasing, which misses a genuinely valuable player nobody has
+    gotten to yet and over-rates a hot name who would not crack the lineup.
+    This ranks every unowned player by the same value score used everywhere
+    else, and states what each would actually upgrade.
+    """
+    if not ctx.player_values:
+        return ""
+    lines = [
+        "WAIVER WIRE — every unowned player in this league worth a claim, "
+        "ranked by value, NOT by how many people are adding them. 'upgrade' is "
+        "how much they would improve YOUR starting lineup: the difference "
+        "between their value and the player they would displace. A negative or "
+        "zero upgrade means they would sit on your bench — only worth a claim "
+        "as insurance or a stash, and say so if you recommend one:"
+    ]
+    any_rows = False
+    for pos in ("QB", "RB", "WR", "TE"):
+        rows = []
+        candidates = [
+            pid
+            for pid in ctx.player_values
+            if pid not in ctx.rostered_ids
+            and (ctx.players.get(pid) or {}).get("position") == pos
+        ]
+        candidates.sort(
+            key=lambda pid: ctx.player_values[pid]["score"], reverse=True
+        )
+        for pid in candidates[:per_pos]:
+            p = ctx.players.get(pid) or {}
+            score = ctx.player_values[pid]["score"]
+            if score <= 0 and rows:
+                break  # Below replacement and we already have real options.
+            upgrade = valuation.upgrade_over_roster(ctx, pid)
+            week = ctx.week_projections.get(pid)
+            bits = [f"val {score}"]
+            if week is not None:
+                bits.append(f"{week}pts this wk")
+            bits.append(f"upgrade {upgrade:+}")
+            flag = f" ⚠{p['injury_status']}" if p.get("injury_status") else ""
+            rows.append(
+                f"    {player_name(p)} ({p.get('team', 'FA')}) "
+                f"[{', '.join(bits)}]{flag}"
+            )
+        if rows:
+            any_rows = True
+            lines.append(f"  {pos}:")
+            lines.extend(rows)
+    return "\n".join(lines) if any_rows else ""
+
+
 async def available_fa_context(
     ctx: LeagueContext, client: SleeperClient, per_pos: int = 8
 ) -> str:
-    """List notable players actually AVAILABLE in this league (trending adds not
-    on any roster), grouped by position — so Grok recommends real waiver options
-    instead of generic names that may already be rostered."""
+    """Players the market is actively chasing who are available here.
+
+    Complements the waiver board: velocity is a leading indicator of news the
+    value scores haven't caught up to yet, so both signals go to the model.
+    """
     trending = await client.get_trending("add", lookback_hours=72, limit=100)
     by_pos: dict[str, list[str]] = {}
     for entry in trending:
@@ -779,8 +837,11 @@ async def available_fa_context(
     if not by_pos:
         return ""
     lines = [
-        "Notable AVAILABLE free agents in your league right now "
-        "(not on any roster, by recent add volume):"
+        "TRENDING ADDS available in your league (not on any roster, ranked by "
+        "recent add volume). Velocity often front-runs the value scores — a "
+        "surge usually means news broke. Cross-check anyone hot here against "
+        "the waiver board above, and if they're being added everywhere but "
+        "score low, say which one you believe and why:"
     ]
     for pos in ("QB", "RB", "WR", "TE", "K", "DEF"):
         if by_pos.get(pos):
@@ -839,32 +900,64 @@ async def hot_free_agents(
 
 
 def suggest_faab_bid(ctx: LeagueContext, candidate: dict, max_adds: int) -> dict:
-    """Turn a hot-FA candidate into a concrete bid, as % of remaining budget.
+    """Turn a free-agent candidate into a concrete bid, as % of remaining FAAB.
 
-    Explainable heuristic:
-      base       = market interest, scaled by add velocity vs. the hottest FA
-      need_mult  = 1.5x if the player fills a positional need, else 1.0x
-      bid_pct    = clamp(base * need_mult, 1%, 55% of remaining FAAB)
+    The two inputs answer different questions and must not be conflated:
+
+      upgrade    = how much this player improves YOUR starting lineup, in value
+                   points. This sets what he is WORTH to you, and therefore the
+                   ceiling of the bid.
+      add volume = how many managers league-wide are chasing him. This is
+                   COMPETITION, not worth: it decides where inside that ceiling
+                   to bid, so you pay up only when someone else might take him.
+
+    Sizing the bid off velocity alone is how a hot name who would never crack
+    your lineup outbids the quiet player who would start immediately.
     """
     remaining = ctx.faab_remaining
-    norm = (candidate["adds"] / max_adds) if max_adds else 0.0
-    base_pct = 0.03 + 0.42 * norm
-    need_mult = 1.5 if candidate["fills_need"] else 1.0
-    bid_pct = min(0.55, max(0.01, base_pct * need_mult))
+    upgrade = valuation.upgrade_over_roster(ctx, candidate["player_id"])
+    priced = bool(ctx.player_values.get(candidate["player_id"]))
 
+    # A ~40-point value upgrade is a season-changing add; scale worth to that.
+    worth = min(1.0, max(0.0, upgrade / 40.0))
+    base_pct = 0.02 + 0.45 * worth
+    if candidate["fills_need"]:
+        base_pct *= 1.15
+
+    # Competition moves the bid within its ceiling, roughly 0.6x to 1.1x.
+    comp = (candidate["adds"] / max_adds) if max_adds else 0.0
+    bid_pct = base_pct * (0.6 + 0.5 * comp)
+
+    if priced and upgrade <= 0:
+        # A stash is worth a few dollars, not a bidding war, however hot he is.
+        bid_pct = min(bid_pct, 0.12)
+    elif not priced:
+        # Unpriced (K/DEF, or no value data): fall back to pure market signal.
+        bid_pct = 0.03 + 0.25 * comp
+
+    bid_pct = min(0.55, max(0.01, bid_pct))
     bid = max(1, round(remaining * bid_pct))
     bid_high = max(bid, round(remaining * min(0.6, bid_pct + 0.06)))
 
     reason_bits = [f"{candidate['adds']:,} adds/48h"]
     if candidate["fills_need"]:
         reason_bits.append(f"fills {candidate['position']} need")
+    if not priced:
+        reason_bits.append("market signal only")
+    elif upgrade >= 15:
+        reason_bits.append(f"big starting upgrade (+{upgrade})")
+    elif upgrade > 0:
+        reason_bits.append(f"modest upgrade (+{upgrade})")
     else:
-        reason_bits.append("depth/upside")
+        reason_bits.append("bench/stash — wouldn't start for you")
+    if comp >= 0.5 and upgrade > 0:
+        reason_bits.append("heavily contested — bid the high end")
 
     return {
         "bid": bid,
         "bid_high": bid_high,
         "pct": round(bid_pct * 100),
+        "upgrade": upgrade,
         "reason": ", ".join(reason_bits),
     }
 
@@ -926,6 +1019,19 @@ async def drop_candidates(
         if rank >= max(starters, 1) + 1:
             score += 1.5
             reasons.append(f"buried #{rank + 1} at {pos}")
+
+        # Value is the strongest drop signal available: a player scoring 0 is
+        # replaceable by the best free agent on the wire, whatever his name.
+        # A CORE player is never a drop candidate — an injured star is someone
+        # you stash, and suggesting otherwise is how you lose a season.
+        tier = ctx.roster_tiers.get(pid)
+        if tier == "CORE":
+            continue
+        if tier == "EXPENDABLE":
+            score += 2.5
+            reasons.append("below replacement level — waiver-grade")
+        elif tier == "STARTER":
+            score -= 4
         # Kickers/defenses are the classic streaming drops.
         if pos in {"K", "DEF"} and rank >= 1:
             score += 1

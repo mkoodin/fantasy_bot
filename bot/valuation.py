@@ -149,10 +149,16 @@ def injury_multiplier(player: Optional[dict]) -> float:
 def compute_values(ctx: Any) -> dict[str, dict]:
     """Price every valuable player in the league.
 
-    Returns player_id -> {vorp, score, points, replacement, injury_mult}, where
-    `score` is VORP normalized to a 0-100 scale across the whole league so that
-    a quarterback and a wide receiver can be compared directly. Scores are the
-    number the trade logic and the model both reason over.
+    Returns player_id -> {vorp, score, base_score, points, replacement,
+    injury_mult}. `score` is VORP normalized to 0-100 across the league and
+    discounted for injury — what the player is worth to a lineup right now.
+    `base_score` is the same number undiscounted: what he is worth when
+    healthy.
+
+    Keeping both matters. Pricing a start/sit call needs the discounted score,
+    but deciding whether someone is expendable must not: an elite back landing
+    on IR would otherwise be demoted out of your core and show up as a drop
+    candidate, which is how you lose a season on a player you should stash.
     """
     levels = replacement_levels(ctx)
     raw: dict[str, dict] = {}
@@ -162,21 +168,26 @@ def compute_values(ctx: Any) -> dict[str, dict]:
             continue
         for pts, pid in _pool(ctx, pos):
             mult = injury_multiplier(ctx.players.get(pid))
-            vorp = (pts - replacement) * mult
+            healthy_vorp = pts - replacement
             raw[pid] = {
                 "points": round(pts, 1),
                 "replacement": round(replacement, 1),
-                "vorp": round(vorp, 1),
+                "vorp": round(healthy_vorp * mult, 1),
+                "healthy_vorp": round(healthy_vorp, 1),
                 "injury_mult": mult,
             }
 
-    best = max((v["vorp"] for v in raw.values()), default=0.0)
+    # Normalize both scales against the same healthy top player, so an injury
+    # moves a player down the board rather than rescaling everyone.
+    best = max((v["healthy_vorp"] for v in raw.values()), default=0.0)
     for entry in raw.values():
         # Below-replacement players score 0: they're waiver fodder, and letting
         # them go negative would make throw-ins look like they cost something.
-        entry["score"] = (
-            round(100.0 * max(0.0, entry["vorp"]) / best, 1) if best > 0 else 0.0
-        )
+        def norm(v: float) -> float:
+            return round(100.0 * max(0.0, v) / best, 1) if best > 0 else 0.0
+
+        entry["score"] = norm(entry["vorp"])
+        entry["base_score"] = norm(entry["healthy_vorp"])
     return raw
 
 
@@ -195,6 +206,9 @@ def roster_tiers(ctx: Any, roster: Optional[dict] = None) -> dict[str, str]:
     valuable isn't enough if the model doesn't also know he's your RB1 and the
     guy behind your third receiver is the one to trade. Ranked within position
     against how many that slot actually starts.
+
+    Deliberately uses healthy value, not this week's injury-discounted value —
+    a hurt starter is someone you stash, not someone you cut.
     """
     roster = roster or ctx.my_roster
     by_pos: dict[str, list[tuple[float, str]]] = {}
@@ -203,7 +217,7 @@ def roster_tiers(ctx: Any, roster: Optional[dict] = None) -> dict[str, str]:
         pos = p.get("position") or ""
         if pos not in VALUED_POSITIONS:
             continue
-        score = (ctx.player_values.get(pid) or {}).get("score", 0.0)
+        score = (ctx.player_values.get(pid) or {}).get("base_score", 0.0)
         by_pos.setdefault(pos, []).append((score, pid))
 
     depth = starter_depth(ctx)
@@ -350,3 +364,173 @@ def trade_posture_context(ctx: Any) -> str:
         "one, state the value on both sides and justify it explicitly."
     )
     return "\n".join(lines)
+
+
+# --- Weekly decisions -------------------------------------------------------
+# Season-long value answers "who is worth more". It is the wrong number for the
+# decisions this bot actually makes most weeks: a lineup is set on THIS week's
+# projection and matchup, and a waiver add is only worth making if it beats the
+# player it displaces. Both are computed here so the model starts from a real
+# baseline and spends its search budget on news instead of arithmetic.
+
+
+def week_points(ctx: Any, pid: str) -> float:
+    """This week's projected points, discounted for injury.
+
+    Falls back to a season projection scaled to one game when the weekly feed
+    is unavailable, which preserves ordering even if the magnitude is coarse.
+    """
+    pts = ctx.week_projections.get(pid)
+    if pts is None:
+        season = ctx.season_projections.get(pid)
+        pts = (season / 17.0) if season is not None else 0.0
+    return pts * injury_multiplier(ctx.players.get(pid))
+
+
+def optimal_lineup(ctx: Any, roster: Optional[dict] = None) -> tuple[list[dict], list[dict]]:
+    """Fill every starting slot with the highest-projected eligible player.
+
+    Fixed slots are filled first from the best players at that position, then
+    flex slots from whoever is left — which is optimal here, not merely greedy:
+    a player eligible for a fixed slot can only ever fill that slot or a flex,
+    so taking the best at each position first never costs a better flex.
+
+    Returns (starters, bench), each entry carrying the slot and projection.
+    """
+    from .analysis import BENCH_SLOTS, FLEX_ELIGIBILITY
+
+    roster = roster or ctx.my_roster
+    slots = [s for s in ctx.league.get("roster_positions", []) if s not in BENCH_SLOTS]
+    available = sorted(
+        (roster.get("players") or []),
+        key=lambda pid: week_points(ctx, pid),
+        reverse=True,
+    )
+    used: set[str] = set()
+    starters: list[dict] = []
+
+    def take(eligible: set[str], slot: str) -> None:
+        for pid in available:
+            if pid in used:
+                continue
+            pos = (ctx.players.get(pid) or {}).get("position")
+            if pos in eligible:
+                used.add(pid)
+                starters.append(
+                    {"slot": slot, "player_id": pid, "points": round(week_points(ctx, pid), 1)}
+                )
+                return
+        starters.append({"slot": slot, "player_id": None, "points": 0.0})
+
+    for slot in slots:
+        if slot in FLEX_ELIGIBILITY:
+            continue
+        take({slot}, slot)
+    for slot in slots:
+        if slot in FLEX_ELIGIBILITY:
+            take(FLEX_ELIGIBILITY[slot], slot)
+
+    bench = [
+        {"player_id": pid, "points": round(week_points(ctx, pid), 1)}
+        for pid in available
+        if pid not in used
+    ]
+    return starters, bench
+
+
+def lineup_context(ctx: Any) -> str:
+    """The projection-optimal lineup for this week, plus the calls to check.
+
+    Given to the model as a starting point, not a verdict: it holds the
+    arithmetic steady so the live search is spent on what the numbers can't
+    see — snap counts, weather, a beat reporter's Friday practice note.
+    """
+    starters, bench = optimal_lineup(ctx)
+    if not starters:
+        return ""
+
+    basis = "this week's projections" if ctx.week_projections else (
+        "season projections scaled per game (no weekly feed available)"
+    )
+    lines = [
+        f"PROJECTION-OPTIMAL LINEUP for Week {ctx.week}, computed from {basis} "
+        "and discounted for injury status. This is the arithmetic baseline "
+        "ONLY — it knows nothing about matchup, weather, snap trends or news. "
+        "Start here, then move players based on what your search actually "
+        "finds, and say what made you deviate:"
+    ]
+    total = 0.0
+    for entry in starters:
+        pid = entry["player_id"]
+        if not pid:
+            lines.append(f"  {entry['slot']}: (empty — no eligible player)")
+            continue
+        p = ctx.players.get(pid) or {}
+        flag = f" ⚠{p['injury_status']}" if p.get("injury_status") else ""
+        total += entry["points"]
+        lines.append(
+            f"  {entry['slot']}: {player_name(p)} "
+            f"({p.get('position', '?')}-{p.get('team', 'FA')}) "
+            f"{entry['points']}pts{flag}"
+        )
+    lines.append(f"  Projected total: {round(total, 1)}pts")
+
+    if bench:
+        lines.append("  Bench: " + ", ".join(
+            f"{player_name(ctx.players.get(b['player_id']) or {})} {b['points']}pts"
+            for b in bench[:8]
+        ))
+
+    # A bench player within a couple of points of a starter is the decision
+    # worth surfacing — that's where news actually changes the answer.
+    close: list[str] = []
+    for entry in starters:
+        if not entry["player_id"]:
+            continue
+        slot_pos = (ctx.players.get(entry["player_id"]) or {}).get("position")
+        for b in bench:
+            bp = ctx.players.get(b["player_id"]) or {}
+            if bp.get("position") != slot_pos:
+                continue
+            gap = entry["points"] - b["points"]
+            if 0 <= gap <= 3:
+                close.append(
+                    f"{player_name(ctx.players.get(entry['player_id']) or {})} "
+                    f"({entry['points']}) over {player_name(bp)} ({b['points']}) "
+                    f"— only {round(gap, 1)}pts apart"
+                )
+    if close:
+        lines.append(
+            "  CLOSE CALLS worth resolving with news rather than projections: "
+            + "; ".join(close[:5])
+        )
+    return "\n".join(lines)
+
+
+def roster_hole_value(ctx: Any, position: str) -> float:
+    """The value of the player a new add at this position would displace.
+
+    Adding is only an upgrade relative to whoever currently occupies the slot,
+    so this is the bar a waiver claim has to clear.
+    """
+    depth = starter_depth(ctx).get(position, 1)
+    owned = sorted(
+        (
+            (ctx.player_values.get(pid) or {}).get("score", 0.0)
+            for pid in (ctx.my_roster.get("players") or [])
+            if (ctx.players.get(pid) or {}).get("position") == position
+        ),
+        reverse=True,
+    )
+    if len(owned) < depth:
+        return 0.0  # An empty starting slot — anyone is an upgrade.
+    return owned[depth - 1]
+
+
+def upgrade_over_roster(ctx: Any, pid: str) -> float:
+    """How much a free agent would improve your starting lineup, in value."""
+    pos = (ctx.players.get(pid) or {}).get("position") or ""
+    if pos not in VALUED_POSITIONS:
+        return 0.0
+    score = (ctx.player_values.get(pid) or {}).get("score", 0.0)
+    return round(score - roster_hole_value(ctx, pos), 1)
