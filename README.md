@@ -112,6 +112,11 @@ scheduled digests. No Railway Cron needed; the scheduler is internal.
   what a player is worth to *your* roster; add volume only decides where inside
   that ceiling to bid, so you pay up when someone might outbid you. Sizing off
   velocity alone is how a hot bust outbids the player who'd actually start.
+- **League rules** constrain the advice. The trade deadline, IR slots and what's
+  IR-eligible, how long dropped players sit on waivers, and the veto threshold
+  all reach the model, so it won't propose a trade after the deadline or tell
+  you to cut a player you could stash on IR for free. Drop rankings skip
+  IR-eligible injuries outright while a slot is open.
 - **Roster fit** decides who's actually available to trade. Every player on your
   team is tiered CORE / STARTER / DEPTH / EXPENDABLE by ranking him within his
   position against how many that slot really starts. Offers get built from

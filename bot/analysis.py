@@ -714,6 +714,75 @@ def scoring_context(ctx: LeagueContext) -> str:
     )
 
 
+def league_rules_context(ctx: LeagueContext) -> str:
+    """The league's operating rules: deadlines, waiver timing, IR, vetoes.
+
+    Advice that ignores these is wrong however good the player analysis is —
+    proposing a trade after the deadline, or suggesting a drop when the player
+    could be stashed on IR for free. Every field is read defensively: Sleeper
+    omits settings that don't apply, and a missing one just drops its line.
+    """
+    st = ctx.league.get("settings") or {}
+    lines: list[str] = ["LEAGUE RULES — these constrain what you can advise:"]
+
+    deadline = st.get("trade_deadline")
+    if deadline:
+        deadline = int(deadline)
+        if ctx.week > deadline:
+            lines.append(
+                f"  TRADE DEADLINE WAS WEEK {deadline} AND IT HAS PASSED "
+                f"(now Week {ctx.week}) — trades are CLOSED. Do not propose "
+                "any trade; the only roster moves left are waivers, free "
+                "agents and lineup changes."
+            )
+        else:
+            left = deadline - ctx.week
+            lines.append(
+                f"  Trade deadline: end of Week {deadline} — {left} week(s) "
+                "left to trade" + (", act now" if left <= 2 else "")
+            )
+
+    ir_slots = st.get("reserve_slots")
+    if ir_slots:
+        on_ir = len(ctx.my_roster.get("reserve") or [])
+        allowed = [
+            label
+            for key, label in (
+                ("reserve_allow_out", "Out"),
+                ("reserve_allow_doubtful", "Doubtful"),
+                ("reserve_allow_sus", "Suspended"),
+                ("reserve_allow_na", "NA"),
+                ("reserve_allow_dnr", "DNR/holdout"),
+            )
+            if st.get(key)
+        ]
+        lines.append(
+            f"  IR slots: {on_ir} of {int(ir_slots)} used"
+            + (f" — only {', '.join(allowed)} players are IR-eligible" if allowed else "")
+            + ". An IR-eligible player should be stashed on IR, NOT dropped: it "
+            "frees the bench spot at no cost. Only recommend dropping him if "
+            "every IR slot is already full."
+        )
+
+    clear_days = st.get("waiver_clear_days")
+    if clear_days:
+        lines.append(
+            f"  Dropped players sit on waivers {int(clear_days)} day(s) before "
+            "becoming free agents — a player dropped today needs a FAAB claim, "
+            "not a free add."
+        )
+
+    veto = st.get("veto_votes_needed")
+    if veto:
+        lines.append(
+            f"  Trade vetoes: {int(veto)} of {len(ctx.rosters)} managers can "
+            "void a trade — a deal that looks lopsided to the league may not "
+            "survive review."
+        )
+
+    return "\n".join(lines) if len(lines) > 1 else ""
+
+
 async def full_league_context(ctx: LeagueContext, client: SleeperClient) -> str:
     """The whole live picture for Grok: your team, all rosters, everyone's FAAB,
     the league's exact scoring, and notable available free agents. Shared by
@@ -721,6 +790,7 @@ async def full_league_context(ctx: LeagueContext, client: SleeperClient) -> str:
     parts = [
         team_context_summary(ctx),
         scoring_context(ctx),
+        league_rules_context(ctx),
         valuation.lineup_context(ctx),
         league_rosters_context(ctx),
         value_board_context(ctx),
@@ -998,18 +1068,41 @@ async def drop_candidates(
             depth_rank[p["player_id"]] = i
 
     required = required_starters(ctx)
+    st = ctx.league.get("settings") or {}
+    ir_total = int(st.get("reserve_slots") or 0)
+    on_ir = set(ctx.my_roster.get("reserve") or [])
+    ir_free = max(0, ir_total - len(on_ir))
+    ir_eligible = {
+        label
+        for key, label in (
+            ("reserve_allow_out", "Out"),
+            ("reserve_allow_doubtful", "Doubtful"),
+            ("reserve_allow_sus", "Sus"),
+            ("reserve_allow_na", "NA"),
+            ("reserve_allow_dnr", "DNR"),
+        )
+        if st.get(key)
+    } | {"IR"}
+
     scored: list[dict] = []
     for pid in ctx.my_roster.get("players") or []:
         p = ctx.players.get(pid)
         if not p:
             continue
+        if pid in on_ir:
+            continue  # Already stashed — not occupying a bench spot.
         pos = p.get("position") or "?"
         score = 0.0
         reasons = []
 
         if is_out(p):
+            status = p.get("injury_status") or ""
+            # Dropping a player you could stash for free is a pure loss, so an
+            # IR-eligible injury is a reason to IR him, not to cut him.
+            if ir_free and status in ir_eligible:
+                continue
             score += 5
-            reasons.append(f"{p.get('injury_status')}")
+            reasons.append(status)
         if pid in drop_velocity:
             score += 2
             reasons.append("being dropped league-wide")
