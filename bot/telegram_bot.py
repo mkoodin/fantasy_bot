@@ -536,32 +536,52 @@ def _is_day(target_day: int) -> bool:
 
 
 async def job_pre(context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not _is_day(config.PRE_DIGEST_DAY):
-        return
-    ctx = await _ctx(force=True)
-    await _push(context, await digest.build_pre_waiver_digest(ctx, client))
+    try:
+        if not _is_day(config.PRE_DIGEST_DAY):
+            return
+        ctx = await _ctx(force=True)
+        await _push(context, await digest.build_pre_waiver_digest(ctx, client))
+    except Exception as exc:
+        logger.exception("pre-waiver digest failed")
+        await _push(context, "⚠️ Scheduled pre-waiver digest failed: "
+                    f"<code>{digest.esc(type(exc).__name__)}: {digest.esc(exc)}</code>")
 
 
 async def job_post(context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not _is_day(config.POST_DIGEST_DAY):
-        return
-    ctx = await _ctx(force=True)
-    await _push(context, await digest.build_post_waiver_digest(ctx, client))
+    try:
+        if not _is_day(config.POST_DIGEST_DAY):
+            return
+        ctx = await _ctx(force=True)
+        await _push(context, await digest.build_post_waiver_digest(ctx, client))
+    except Exception as exc:
+        logger.exception("post-waiver digest failed")
+        await _push(context, "⚠️ Scheduled post-waiver digest failed: "
+                    f"<code>{digest.esc(type(exc).__name__)}: {digest.esc(exc)}</code>")
 
 
 async def job_startsit(context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not _is_day(config.STARTSIT_DAY):
-        return
-    ctx = await _ctx(force=True)
-    await _push(context, await digest.build_start_sit(ctx, client, final=False))
+    try:
+        if not _is_day(config.STARTSIT_DAY):
+            return
+        ctx = await _ctx(force=True)
+        await _push(context, await digest.build_start_sit(ctx, client, final=False))
+    except Exception as exc:
+        logger.exception("start/sit digest failed")
+        await _push(context, "⚠️ Scheduled start/sit digest failed: "
+                    f"<code>{digest.esc(type(exc).__name__)}: {digest.esc(exc)}</code>")
 
 
 async def job_gameday(context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not _is_day(config.GAMEDAY_DAY):
-        return
-    ctx = await _ctx(force=True)
-    # Sunday is the last-minute check: full start/sit weighted to late news.
-    await _push(context, await digest.build_start_sit(ctx, client, final=True))
+    try:
+        if not _is_day(config.GAMEDAY_DAY):
+            return
+        ctx = await _ctx(force=True)
+        # Sunday is the last-minute check: full start/sit weighted to late news.
+        await _push(context, await digest.build_start_sit(ctx, client, final=True))
+    except Exception as exc:
+        logger.exception("gameday sweep failed")
+        await _push(context, "⚠️ Scheduled gameday sweep failed: "
+                    f"<code>{digest.esc(type(exc).__name__)}: {digest.esc(exc)}</code>")
 
 
 async def job_fa_watch(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -724,21 +744,47 @@ def _register_jobs(app: Application) -> None:
 
 
 async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Global safety net: log any unhandled error and tell the user, so a
-    failure (or a mid-request restart) never leaves them hanging silently."""
-    logger.exception("Unhandled handler error", exc_info=context.error)
+    """Global safety net: log any unhandled error and tell the user.
+
+    The message names the actual exception. A bare "something went wrong" is
+    unactionable — it looks identical whether the cause is a bad API key, a
+    message Telegram rejected, or a genuine bug, and this bot has exactly one
+    user, who is also the person who can fix it.
+    """
+    exc = context.error
+    logger.exception("Unhandled handler error", exc_info=exc)
     chat_id = config.TELEGRAM_CHAT_ID
     if isinstance(update, Update) and update.effective_chat:
         chat_id = update.effective_chat.id
     if not chat_id:
         return
+
+    detail = f"{type(exc).__name__}: {exc}" if exc else "unknown error"
+    where = ""
+    tb = getattr(exc, "__traceback__", None)
+    while tb:  # innermost frame in our own code is the useful one
+        name = tb.tb_frame.f_code.co_filename
+        if "/bot/" in name or name.endswith("waiver_bot.py"):
+            where = f"{name.rsplit('/', 1)[-1]}:{tb.tb_lineno}"
+        tb = tb.tb_next
     try:
         await context.bot.send_message(
             chat_id=chat_id,
-            text="⚠️ Something interrupted that — please try again in a moment.",
+            text=(
+                "⚠️ That failed. Details so it can be fixed:\n"
+                f"<code>{digest.esc(detail[:400])}</code>"
+                + (f"\n<i>at {digest.esc(where)}</i>" if where else "")
+            ),
+            parse_mode=ParseMode.HTML,
         )
     except Exception:
-        pass
+        # Even the error report failed — fall back to plain text.
+        try:
+            await context.bot.send_message(
+                chat_id=chat_id, text=f"⚠️ That failed: {detail[:400]}"
+            )
+        except Exception:
+            pass
 
 
 def build_application() -> Application:
