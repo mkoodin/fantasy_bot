@@ -440,15 +440,23 @@ async def cmd_diag(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             f"{len(ctx.season_projections)} season)"
         )
         levels = valuation.replacement_levels(ctx)
+        ranks = valuation.replacement_ranks(ctx)
         lines.append(
             f"Valuation: {yn(ctx.player_values)} ({len(ctx.player_values)} "
             "players priced)"
         )
-        if levels:
+        if ranks:
+            # Shown as ranks because those are checkable by eye: a 12-team
+            # league should land near RB35/WR47/TE15/QB14. Anything wildly off
+            # means an input is wrong — most likely market rank read backwards.
             lines.append(
                 "  <i>replacement level: "
-                + digest.esc(", ".join(f"{k} {v:.0f}pts" for k, v in sorted(levels.items())))
-                + "</i>"
+                + digest.esc(", ".join(
+                    f"{pos}{ranks[pos]} ({levels[pos]:.0f}pts)"
+                    for pos in sorted(ranks)
+                ))
+                + " — sanity check: a 12-team league should be near RB35, "
+                "WR47, TE15, QB14</i>"
             )
         if not ctx.has_projections:
             lines.append(

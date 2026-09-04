@@ -23,7 +23,7 @@ Layered on top:
 import math
 from typing import Any, Optional
 
-from .sleeper import FANTASY_POSITIONS, is_out, player_name
+from .sleeper import FANTASY_POSITIONS, player_name
 
 # Positions we can meaningfully value. K and DEF are streamed, not traded.
 VALUED_POSITIONS = ("QB", "RB", "WR", "TE")
@@ -534,3 +534,19 @@ def upgrade_over_roster(ctx: Any, pid: str) -> float:
         return 0.0
     score = (ctx.player_values.get(pid) or {}).get("score", 0.0)
     return round(score - roster_hole_value(ctx, pos), 1)
+
+
+def replacement_ranks(ctx: Any) -> dict[str, int]:
+    """Which rank at each position the replacement line falls on (e.g. RB35).
+
+    Points alone can't be eyeballed for correctness, but ranks can: a 12-team
+    league should land near RB35 / WR47 / TE15 / QB14, and anything wildly off
+    means an input is wrong — most likely that market rank was read backwards.
+    """
+    out: dict[str, int] = {}
+    for pos, level in replacement_levels(ctx).items():
+        pool = _pool(ctx, pos)
+        idx = next((i for i, (pts, _) in enumerate(pool, 1) if pts <= level), None)
+        if idx:
+            out[pos] = idx
+    return out
