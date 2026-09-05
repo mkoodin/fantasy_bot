@@ -198,6 +198,11 @@ def build_guide() -> str:
         "• <b>/roster</b> · <b>/needs</b> · <b>/trending</b> · <b>/gameday</b>",
         "• <b>/diag</b> — what data loaded, and is the journal durable",
         "",
+        "<b>📰 Digests on demand</b>",
+        "• <b>/pre</b> — waiver targets + bids + drops (the Tuesday brief "
+        "covers this automatically)",
+        "• <b>/post</b> — league recap + what's left on the wire",
+        "",
         "<b>🧠 Ask anytime</b>",
         "• <b>/usage</b> — whose role grew or shrank; where points lag the role",
         "• <b>/stash</b> — who's one injury away from starter value",
@@ -211,6 +216,8 @@ def build_guide() -> str:
         "<b>📓 Decisions</b>",
         "• <b>/log</b> added X, dropped Y | expected: ... — record a move",
         "• <b>/journal</b> — recent decisions · <b>/review</b> — score them",
+        "",
+        "<i>/reset clears the conversation memory · /guide reprints this</i>",
         "",
         "💬 <b>Or just text me.</b> Trade, draft and lineup questions upgrade "
         "to the flagship model automatically.",
