@@ -66,6 +66,7 @@ HELP_TEXT = (
     "<b>/deep &lt;question&gt;</b> — force the flagship model for a big call\n"
     "<b>/gameday</b> — quick injury sweep of your starters\n"
     "<b>/reset</b> — clear conversation memory / start a fresh topic\n"
+    "<b>/guide</b> — the weekly schedule + everything you can ask (pin this)\n"
     "<b>/help</b> — this message\n\n"
     "💬 <b>Or just text me any question</b> — e.g. \"who should I start at "
     "FLEX?\" or \"best waiver TE for my team?\" — and I'll answer using your "
@@ -122,6 +123,128 @@ async def _ctx(force: bool = False) -> analysis.LeagueContext:
 @authorized_only
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await _send(update, HELP_TEXT)
+
+
+# The pinned reference. Built from config rather than written out, so it can
+# never drift from what the bot actually does once times are retuned.
+_DAY_NAMES = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday",
+              "Saturday", "Sunday")
+
+# (label, what it does, enabled flag, weekday, time)
+def _scheduled_rows() -> list[tuple]:
+    c = config
+    rows = [
+        ("Get there first", "roles that changed today — grab Tuesday's top claim tonight",
+         c.SCOUT_BRIEF_ENABLED, c.SCOUT_BRIEF_DAY, c.SCOUT_BRIEF_TIME),
+        ("What changed", "usage postmortem before the articles set the market",
+         c.USAGE_BRIEF_ENABLED, c.USAGE_BRIEF_DAY, c.USAGE_BRIEF_TIME),
+        ("Waiver claims &amp; FAAB", "bids + who to drop, before claims process",
+         c.WAIVER_BRIEF_ENABLED, c.WAIVER_BRIEF_DAY, c.WAIVER_BRIEF_TIME),
+        ("Post-waiver", "who went unclaimed, and what rivals dropped",
+         True, c.POST_DIGEST_DAY, c.POST_DIGEST_TIME),
+        ("Tonight's lock", "TNF starters, and keeping FLEX free for Sunday",
+         c.TNF_BRIEF_ENABLED, c.TNF_BRIEF_DAY, c.TNF_BRIEF_TIME),
+        ("Start/sit", "optimal lineup once practice reports are in",
+         True, c.STARTSIT_DAY, c.STARTSIT_TIME),
+        ("Bench audit", "every spot justified + free options on questionable starters",
+         c.BENCH_BRIEF_ENABLED, c.BENCH_BRIEF_DAY, c.BENCH_BRIEF_TIME),
+        ("Inactives", "final injury sweep before kickoff",
+         True, c.GAMEDAY_DAY, c.GAMEDAY_TIME),
+    ]
+    if c.PRE_DIGEST_ENABLED:
+        rows.append(("Pre-waiver (legacy)", "off by default — fires before MNF",
+                     True, c.PRE_DIGEST_DAY, c.PRE_DIGEST_TIME))
+    # Read as a week: Sunday night leads into Monday, so start the week there.
+    return sorted(
+        [r for r in rows if r[2]],
+        key=lambda r: ((r[3] - config.SCOUT_BRIEF_DAY) % 7, r[4]),
+    )
+
+
+def build_guide() -> str:
+    """The pinned reference: what arrives when, and what can be asked anytime."""
+    tz = str(config.TIMEZONE).split("/")[-1].replace("_", " ")
+    lines = [
+        "🏈 <b>Fantasy GM — how this works</b>",
+        "",
+        f"<b>📅 What arrives, and when</b> <i>({tz})</i>",
+    ]
+    for label, why, _, day, tm in _scheduled_rows():
+        lines.append(
+            f"• <b>{_DAY_NAMES[day]} {tm.strftime('%-I:%M%p').lower()}</b> — "
+            f"{label}\n   <i>{why}</i>"
+        )
+    watches = []
+    if config.NEWS_WATCH_ENABLED and config.ENABLE_GROK:
+        watches.append(
+            f"• <b>Every {config.NEWS_WATCH_HOURS:g}h</b> — breaking-news watch: reads X "
+            "and the news directly, and only speaks when the player who "
+            "benefits is actually free in your league"
+        )
+    if config.FA_WATCH_ENABLED:
+        watches.append(
+            f"• <b>Every {config.FA_WATCH_HOURS:g}h</b> — free-agent watch on add "
+            "volume (a lagging backstop, never first)"
+        )
+    if watches:
+        lines += ["", "<b>🔔 Always running</b>"] + watches
+
+    lines += [
+        "",
+        "<b>⚡ Instant — no model, no cost</b>",
+        "• <b>/tradecheck</b> A for B — price a specific offer",
+        "• <b>/waivers</b> — targets, bids, and who to drop for each",
+        "• <b>/drops</b> — who's droppable (never a starter or an IR stash)",
+        "• <b>/roster</b> · <b>/needs</b> · <b>/trending</b> · <b>/gameday</b>",
+        "• <b>/diag</b> — what data loaded, and is the journal durable",
+        "",
+        "<b>🧠 Ask anytime</b>",
+        "• <b>/usage</b> — whose role grew or shrank; where points lag the role",
+        "• <b>/stash</b> — who's one injury away from starter value",
+        "• <b>/bench</b> — why do I own each bench player",
+        "• <b>/plan</b> — next 2-4 weeks: byes, thin spots, what to buy early",
+        "• <b>/news</b> — scan X + news right now",
+        "• <b>/startsit</b> — this week's lineup, slot by slot",
+        "• <b>/trade</b> — find a deal; <b>/player</b> &lt;name&gt; — one player",
+        "• <b>/deep</b> &lt;question&gt; — force the flagship model",
+        "",
+        "<b>📓 Decisions</b>",
+        "• <b>/log</b> added X, dropped Y | expected: ... — record a move",
+        "• <b>/journal</b> — recent decisions · <b>/review</b> — score them",
+        "",
+        "💬 <b>Or just text me.</b> Trade, draft and lineup questions upgrade "
+        "to the flagship model automatically.",
+        "",
+        "<i>Every answer starts from your league's own numbers — value over "
+        "replacement in your scoring, real snap and target share, depth charts "
+        "— then layers the live X read on top and says what moved it.</i>",
+    ]
+    return "\n".join(lines)
+
+
+@authorized_only
+async def cmd_guide(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """The pinned reference: /guide."""
+    text = build_guide()
+    chat = update.effective_chat
+    sent = None
+    for chunk in digest.split_for_telegram(text):
+        sent = await chat.send_message(
+            chunk, parse_mode=ParseMode.HTML, disable_web_page_preview=True
+        )
+    # Pin it, since the whole point is that it stays reachable. Bots can pin in
+    # their own private chats; in a group this needs admin, so failure is
+    # normal rather than an error worth surfacing loudly.
+    if sent is not None:
+        try:
+            await chat.pin_message(sent.message_id, disable_notification=True)
+        except Exception:
+            logger.info("Could not pin the guide", exc_info=True)
+            await chat.send_message(
+                "<i>Couldn't pin that automatically — long-press the message "
+                "above and choose Pin.</i>",
+                parse_mode=ParseMode.HTML,
+            )
 
 
 @authorized_only
@@ -1108,6 +1231,7 @@ def build_application() -> Application:
 
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_help))
+    app.add_handler(CommandHandler("guide", cmd_guide))
     app.add_handler(CommandHandler("pre", cmd_pre))
     app.add_handler(CommandHandler("post", cmd_post))
     app.add_handler(CommandHandler("waivers", cmd_waivers))

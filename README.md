@@ -35,6 +35,7 @@ trades / lineup optimization auto-upgrade to the flagship model.
 | `/drops` | Droppable players on your roster |
 | `/roster` | Your team by position (injuries flagged) |
 | `/needs` | Where your roster is thin |
+| `/guide` | The weekly schedule + everything you can ask — pins itself |
 | `/log` | Record a move you made, and what you expected |
 | `/journal` | Review recent decisions |
 | `/review` | Score past calls against what actually happened |
