@@ -1275,25 +1275,6 @@ async def full_league_context(ctx: LeagueContext, client: SleeperClient) -> str:
     return "\n\n".join(p for p in parts if p)
 
 
-def league_faab_context(ctx: LeagueContext) -> str:
-    """Each team's remaining FAAB, so bid advice accounts for who can outbid you
-    (waivers go to the highest bidder)."""
-    rows = []
-    for r in ctx.rosters:
-        used = int((r.get("settings") or {}).get("waiver_budget_used") or 0)
-        rem = max(0, ctx.faab_total - used)
-        mine = r.get("owner_id") == ctx.my_user_id
-        rows.append((ctx.team_name(r.get("owner_id", "")), rem, mine))
-    rows.sort(key=lambda x: x[1], reverse=True)
-    lines = [
-        f"FAAB remaining by team (of ${ctx.faab_total}; highest bid wins a "
-        "waiver — use this to size a winning bid and spot who can outbid you):"
-    ]
-    for name, rem, mine in rows:
-        lines.append(f"  {name}{' (YOU)' if mine else ''}: ${rem}")
-    return "\n".join(lines)
-
-
 def waiver_board_context(ctx: LeagueContext, per_pos: int = 8) -> str:
     """The best players available in this league, ranked by value.
 
