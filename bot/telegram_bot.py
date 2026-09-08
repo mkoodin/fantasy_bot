@@ -489,6 +489,15 @@ async def _answer(
         text += "\n\n<b>Sources:</b>\n" + "\n".join(
             f"• {digest.esc(c)}" for c in cites[:4]
         )
+    else:
+        # Searching is offered to the model, not forced, so an answer built
+        # only from the league data looks exactly like a researched one. Say
+        # which it was rather than letting the absence pass unnoticed.
+        text += (
+            "\n\n<i>⚠️ No live sources — answered from your league data and "
+            "projections only. Ask again or use /deep if this needed current "
+            "news.</i>"
+        )
     await _send(update, text)
 
 
