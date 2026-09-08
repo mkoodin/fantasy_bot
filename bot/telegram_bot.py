@@ -6,6 +6,7 @@ handlers serve on-demand queries. Everything shares a single SleeperClient
 and the cached LeagueContext from analysis.build_context().
 """
 
+import asyncio
 import logging
 import re
 from datetime import datetime
@@ -14,6 +15,7 @@ from typing import Optional
 
 from telegram import Update
 from telegram.constants import ChatAction, ParseMode
+from telegram.error import BadRequest, NetworkError, RetryAfter, TimedOut
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -92,20 +94,55 @@ def authorized_only(func):
 
 
 # --- Helpers ----------------------------------------------------------------
-async def _send(update: Update, text: str) -> None:
-    for chunk in digest.split_for_telegram(text):
+# Telegram's API returns 502s and times out under load. Those are not our
+# failures and must not be reported as bugs — they need retrying.
+_TRANSIENT_SEND = (NetworkError, TimedOut, RetryAfter)
+
+
+async def _deliver(send, chunk: str) -> None:
+    """Send one chunk, retrying Telegram's transient failures.
+
+    The two failure modes need opposite handling. A BadRequest is our
+    markup — one malformed tag makes Telegram reject the whole message, and
+    losing the formatting beats losing the answer, so it is resent as plain
+    text. A network error is Telegram's, and resending in a different format
+    would only duplicate a message that may well have landed; it is retried
+    as-is with backoff, then given up on.
+    """
+    delay, last = 1.0, None
+    for _ in range(4):
         try:
-            await update.effective_chat.send_message(
-                chunk, parse_mode=ParseMode.HTML, disable_web_page_preview=True
-            )
-        except Exception:
-            # A single malformed tag makes Telegram reject the whole message.
-            # Losing the formatting beats losing the answer, so retry as plain
-            # text before letting the error handler swallow it.
-            logger.warning("HTML send failed; retrying as plain text", exc_info=True)
-            await update.effective_chat.send_message(
-                chunk, disable_web_page_preview=True
-            )
+            await send(chunk, True)
+            return
+        except BadRequest:
+            logger.warning("HTML rejected; resending as plain text", exc_info=True)
+            await send(chunk, False)
+            return
+        except _TRANSIENT_SEND as exc:
+            last = exc
+            # RetryAfter carries the server's requested delay; anything
+            # unparseable falls back to our own backoff rather than raising a
+            # second, more confusing error from inside the retry path.
+            try:
+                wait = float(getattr(exc, "retry_after", None) or delay)
+            except (TypeError, ValueError):
+                wait = delay
+            logger.info("Transient Telegram error (%s); retrying in %ss", exc, wait)
+            await asyncio.sleep(min(wait, 30.0))
+            delay *= 2
+    raise last
+
+
+async def _send(update: Update, text: str) -> None:
+    async def send(chunk: str, html: bool) -> None:
+        await update.effective_chat.send_message(
+            chunk,
+            parse_mode=ParseMode.HTML if html else None,
+            disable_web_page_preview=True,
+        )
+
+    for chunk in digest.split_for_telegram(text):
+        await _deliver(send, chunk)
 
 
 async def _typing(update: Update) -> None:
@@ -833,13 +870,16 @@ async def _push(context: ContextTypes.DEFAULT_TYPE, text: str) -> None:
     if not config.TELEGRAM_CHAT_ID:
         logger.warning("No TELEGRAM_CHAT_ID set; skipping scheduled push.")
         return
-    for chunk in digest.split_for_telegram(text):
+    async def send(chunk: str, html: bool) -> None:
         await context.bot.send_message(
             chat_id=config.TELEGRAM_CHAT_ID,
             text=chunk,
-            parse_mode=ParseMode.HTML,
+            parse_mode=ParseMode.HTML if html else None,
             disable_web_page_preview=True,
         )
+
+    for chunk in digest.split_for_telegram(text):
+        await _deliver(send, chunk)
 
 
 def _is_day(target_day: int) -> bool:
@@ -1204,6 +1244,22 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not chat_id:
         return
 
+    if isinstance(exc, _TRANSIENT_SEND):
+        # Telegram itself was unavailable. Nothing here is broken and there is
+        # nothing to fix, so say that once, briefly, and never in two formats:
+        # the earlier version's HTML-then-plain fallback double-reported a 502
+        # whose first message had in fact been delivered.
+        logger.warning("Transient Telegram error: %s", exc)
+        try:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text="⚠️ Telegram dropped that one (their end, not yours). "
+                "Send it again.",
+            )
+        except Exception:
+            pass
+        return
+
     detail = f"{type(exc).__name__}: {exc}" if exc else "unknown error"
     where = ""
     tb = getattr(exc, "__traceback__", None)
@@ -1222,14 +1278,17 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
             ),
             parse_mode=ParseMode.HTML,
         )
-    except Exception:
-        # Even the error report failed — fall back to plain text.
+    except BadRequest:
+        # Only a markup rejection warrants a second attempt; a network failure
+        # may already have delivered the first one.
         try:
             await context.bot.send_message(
                 chat_id=chat_id, text=f"⚠️ That failed: {detail[:400]}"
             )
         except Exception:
             pass
+    except Exception:
+        logger.exception("Could not deliver the error report")
 
 
 def build_application() -> Application:
