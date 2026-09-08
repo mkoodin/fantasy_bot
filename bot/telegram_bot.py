@@ -1068,6 +1068,14 @@ async def job_news_watch(context: ContextTypes.DEFAULT_TYPE) -> None:
     seen.update(named)
 
     await _push(context, "📡 <b>Breaking — act on this</b>\n\n" + digest.esc(text))
+    # Feed it back into the context so later answers can reconcile with it
+    # rather than contradicting it minutes afterwards.
+    if config.JOURNAL_ENABLED:
+        try:
+            wk = (await _ctx()).week
+        except Exception:
+            wk = 0
+        journal.record("alert", wk, text[:400], players=sorted(named)[:8])
 
 
 # --- The weekly briefs ------------------------------------------------------

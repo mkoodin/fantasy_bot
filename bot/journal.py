@@ -145,3 +145,43 @@ def summarize(entries: list[dict]) -> str:
             line += f"\n   <i>actual: {e['outcome']}</i>"
         out.append(line)
     return "\n\n".join(out)
+
+
+def recent_since(hours: float, kind: str) -> list[dict]:
+    """Entries of one kind written within the last `hours`."""
+    from datetime import timedelta
+
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+    out = []
+    for e in _load():
+        if e.get("kind") != kind:
+            continue
+        try:
+            when = datetime.fromisoformat(e["ts"])
+        except (KeyError, ValueError):
+            continue
+        if when >= cutoff:
+            out.append(e)
+    return out
+
+
+def recent_alerts_context(hours: float = 12.0) -> str:
+    """What the bot has already told the user recently.
+
+    Without this each answer is written from scratch, so a news alert and a
+    lineup call made minutes apart could contradict each other and neither
+    would know. Feeding recent alerts back in gives every later answer the
+    chance to either agree or say plainly what changed.
+    """
+    alerts = recent_since(hours, "alert")
+    if not alerts:
+        return ""
+    lines = [
+        "ALREADY TOLD THE USER, in the last few hours — these came from a news "
+        "sweep, not from the full projections. If your answer now disagrees "
+        "with one, say so explicitly and explain what you are weighing that "
+        "the alert was not; do NOT silently contradict it:"
+    ]
+    for e in alerts[-4:]:
+        lines.append(f"  [{e.get('ts','')[:16]}] {e.get('summary','')}")
+    return "\n".join(lines)

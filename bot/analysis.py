@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Optional
 
-from . import config, valuation
+from . import config, journal, valuation
 from .sleeper import (
     FANTASY_POSITIONS,
     SleeperClient,
@@ -1262,6 +1262,7 @@ async def full_league_context(ctx: LeagueContext, client: SleeperClient) -> str:
         usage_movers_context(ctx),
         usage_faders_context(ctx),
         signal_conflicts_context(ctx),
+        journal.recent_alerts_context(),
         data_confidence_context(ctx),
         league_rosters_context(ctx),
         value_board_context(ctx),
