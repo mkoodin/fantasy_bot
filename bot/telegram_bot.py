@@ -15,7 +15,13 @@ from typing import Optional
 
 from telegram import Update
 from telegram.constants import ChatAction, ParseMode
-from telegram.error import BadRequest, NetworkError, RetryAfter, TimedOut
+from telegram.error import (
+    BadRequest,
+    Conflict,
+    NetworkError,
+    RetryAfter,
+    TimedOut,
+)
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -1228,6 +1234,29 @@ def _register_jobs(app: Application) -> None:
     )
 
 
+# A failure in the polling loop repeats on every cycle, so reporting each one
+# turns a single problem into a stream of identical alerts. Report a given
+# error once, then stay quiet about it for a while.
+_reported_at: dict[str, float] = {}
+_REPORT_COOLDOWN = 900.0        # 15 minutes for ordinary errors
+_CONFLICT_COOLDOWN = 3600.0     # an hour for the ones that fire continuously
+
+
+def _should_report(exc: Exception) -> bool:
+    """True if this error hasn't already been reported recently."""
+    import time
+
+    sig = f"{type(exc).__name__}:{str(exc)[:80]}"
+    cooldown = _CONFLICT_COOLDOWN if isinstance(exc, Conflict) else _REPORT_COOLDOWN
+    now = time.time()
+    if now - _reported_at.get(sig, 0.0) < cooldown:
+        return False
+    _reported_at[sig] = now
+    if len(_reported_at) > 50:
+        _reported_at.clear()
+    return True
+
+
 async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Global safety net: log any unhandled error and tell the user.
 
@@ -1242,6 +1271,37 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     if isinstance(update, Update) and update.effective_chat:
         chat_id = update.effective_chat.id
     if not chat_id:
+        return
+
+    if not _should_report(exc):
+        # Already told them about this one; the log still has every occurrence.
+        return
+
+    if isinstance(exc, Conflict):
+        # Telegram allows exactly one poller per bot token. This is almost
+        # always a second copy of this same bot — not a different bot, which
+        # has its own token and cannot collide.
+        try:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=(
+                    "⚠️ <b>Two copies of this bot are running.</b>\n\n"
+                    "Telegram only allows one, so they are fighting over "
+                    "updates and messages will be unreliable until one stops."
+                    "\n\nUsual causes:\n"
+                    "• a redeploy where the old container hasn't shut down "
+                    "yet — this clears itself within a minute\n"
+                    "• two Railway services (or two replicas) sharing the same "
+                    "<code>TELEGRAM_TOKEN</code>\n"
+                    "• a local copy running while the deployed one is live\n\n"
+                    "A second, different bot is not the cause — it has its own "
+                    "token. If this persists past a minute, check Railway for "
+                    "a duplicate service or a replica count above one."
+                ),
+                parse_mode=ParseMode.HTML,
+            )
+        except Exception:
+            logger.exception("Could not deliver the conflict notice")
         return
 
     if isinstance(exc, _TRANSIENT_SEND):

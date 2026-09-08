@@ -76,7 +76,10 @@ def main() -> None:
     logger.info("Starting always-on Telegram bot…")
     app = build_application()
     # run_polling manages its own event loop and blocks until interrupted.
-    app.run_polling(allowed_updates=["message"])
+    # drop_pending_updates discards anything queued while the process was
+    # down. Without it a restart replays the backlog, which after a crash or a
+    # redeploy means re-answering questions that were already answered.
+    app.run_polling(allowed_updates=["message"], drop_pending_updates=True)
 
 
 if __name__ == "__main__":
