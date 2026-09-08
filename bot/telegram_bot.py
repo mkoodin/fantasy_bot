@@ -8,6 +8,7 @@ and the cached LeagueContext from analysis.build_context().
 
 import asyncio
 import logging
+import time
 import re
 from datetime import datetime
 from functools import wraps
@@ -1249,11 +1250,18 @@ _reported_at: dict[str, float] = {}
 _REPORT_COOLDOWN = 900.0        # 15 minutes for ordinary errors
 _CONFLICT_COOLDOWN = 3600.0     # an hour for the ones that fire continuously
 
+# Deploying a polling bot always produces a brief conflict: the platform starts
+# the new container before stopping the old, and Telegram tolerates only one
+# poller. That window is expected and clears itself, so it is not worth an
+# alert — and the in-memory cooldown above cannot suppress it, because the
+# restart that causes the conflict also clears the cooldown. Time from start is
+# the signal that separates a routine handover from a real duplicate instance.
+_STARTED_AT = time.monotonic()
+_CONFLICT_GRACE = 150.0
+
 
 def _should_report(exc: Exception) -> bool:
     """True if this error hasn't already been reported recently."""
-    import time
-
     sig = f"{type(exc).__name__}:{str(exc)[:80]}"
     cooldown = _CONFLICT_COOLDOWN if isinstance(exc, Conflict) else _REPORT_COOLDOWN
     now = time.time()
@@ -1286,25 +1294,30 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     if isinstance(exc, Conflict):
-        # Telegram allows exactly one poller per bot token. This is almost
-        # always a second copy of this same bot — not a different bot, which
-        # has its own token and cannot collide.
+        if time.monotonic() - _STARTED_AT < _CONFLICT_GRACE:
+            # The previous container is still finishing its shutdown. Normal,
+            # self-resolving, and not worth waking anyone for.
+            logger.info("Conflict during startup handover; suppressing: %s", exc)
+            return
+        # Past the handover window, so this is a genuine second instance —
+        # not a different bot, which has its own token and cannot collide.
         try:
             await context.bot.send_message(
                 chat_id=chat_id,
                 text=(
                     "⚠️ <b>Two copies of this bot are running.</b>\n\n"
-                    "Telegram only allows one, so they are fighting over "
-                    "updates and messages will be unreliable until one stops."
-                    "\n\nUsual causes:\n"
-                    "• a redeploy where the old container hasn't shut down "
-                    "yet — this clears itself within a minute\n"
-                    "• two Railway services (or two replicas) sharing the same "
-                    "<code>TELEGRAM_TOKEN</code>\n"
-                    "• a local copy running while the deployed one is live\n\n"
-                    "A second, different bot is not the cause — it has its own "
-                    "token. If this persists past a minute, check Railway for "
-                    "a duplicate service or a replica count above one."
+                    "Telegram only allows one poller per token, so they are "
+                    "fighting over updates and messages will be unreliable "
+                    "until one stops.\n\n"
+                    "This is not the brief overlap of a redeploy — that is "
+                    "ignored. It has been "
+                    f"{int((time.monotonic() - _STARTED_AT) / 60)} minutes "
+                    "since this copy started, so something else is genuinely "
+                    "polling the same token:\n"
+                    "• two Railway services, or a replica count above one, "
+                    "sharing the same <code>TELEGRAM_TOKEN</code>\n"
+                    "• a local copy still running against the live bot\n\n"
+                    "A different bot cannot cause this — it has its own token."
                 ),
                 parse_mode=ParseMode.HTML,
             )
