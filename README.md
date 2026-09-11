@@ -43,6 +43,7 @@ trades / lineup optimization auto-upgrade to the flagship model.
 | `/stash` | Who is one injury away from starter value |
 | `/bench` | Why do I own each bench player |
 | `/plan` | The next 2-4 weeks: byes, thin spots, what to buy early |
+| `/openings` | Jobs open right now from an injury, and who inherits them |
 | `/news` | Scan X + news now for anything actionable on your wire |
 | `/trending` | Most-added players across Sleeper right now |
 | `/player <name>` | Outlook + availability in your league + FAAB bid |
@@ -67,9 +68,21 @@ chosen around when the decision is actually made, not around convenience:
 | **Sat 11am** | Bench audit | Every spot justified; free options on questionable starters |
 | **Sun 11:15am** | Inactives | Final sweep before kickoff |
 
-Plus two watches: a **breaking-news watch** every 3h that reads X and the news
-directly and only speaks when the beneficiary is free in your league, and a
-free-agent watch every 4h on add volume (Sleeper-only, so free).
+Plus three watches, fastest first:
+
+- **Depth-chart watch — every 15 min.** The one that beats the market. It diffs
+  Sleeper's own injury flags against the last run, and the moment a starter is
+  flagged out it derives the beneficiary from the depth chart and says whether
+  he's still unrostered in your league. No model call, so it costs nothing and
+  can run constantly. Crucially it does **not** wait to read that someone
+  benefits — by the time enough people have posted "go get the backup" for a
+  search to surface it, he's gone. The job is knowable the instant the starter
+  is flagged.
+- **Breaking-news watch — every 3h.** Reads X and the news directly for role
+  changes an injury flag won't show, and only speaks when the beneficiary is
+  actually free here.
+- **Free-agent watch — every 4h.** Add volume, Sleeper-only so it's free. A
+  lagging confirmation; by definition never first.
 
 > The old Monday 7pm pre-waiver digest is **off by default**: it fired before
 > Monday Night Football, so it priced claims on an incomplete week. The Tuesday
