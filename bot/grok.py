@@ -74,10 +74,18 @@ def _trusted_directive() -> str:
     )
 
 
-def _tools() -> list[dict]:
-    from_date = (
-        datetime.now(timezone.utc) - timedelta(days=config.GROK_LOOKBACK_DAYS)
-    ).strftime("%Y-%m-%d")
+def _tools(lookback_hours: Optional[float] = None) -> list[dict]:
+    """Search tools, optionally narrowed to a tight recency window.
+
+    from_date is what actually bounds the search; the prose in a prompt does
+    not. Leaving it at the default three days while asking for "the last five
+    hours" is how a day-old story gets reported as breaking.
+    """
+    if lookback_hours is not None:
+        delta = timedelta(hours=lookback_hours)
+    else:
+        delta = timedelta(days=config.GROK_LOOKBACK_DAYS)
+    from_date = (datetime.now(timezone.utc) - delta).strftime("%Y-%m-%d")
     x_search: dict = {"type": "x_search", "from_date": from_date}
     if config.X_RESTRICT_TO_HANDLES and config.X_TRUSTED_HANDLES:
         # allowed_x_handles caps at 20 per the API.
@@ -175,13 +183,18 @@ def _answer_instructions(team_context: str) -> str:
     )
 
 
-def _post(instructions: str, input_messages: list, model: str) -> dict:
+def _post(
+    instructions: str,
+    input_messages: list,
+    model: str,
+    lookback_hours: Optional[float] = None,
+) -> dict:
     """Blocking POST to the Responses API. Runs in a worker thread."""
     body = {
         "model": model,
         "instructions": instructions,
         "input": input_messages,
-        "tools": _tools(),
+        "tools": _tools(lookback_hours),
         "temperature": config.GROK_TEMPERATURE,
     }
     resp = requests.post(
@@ -199,14 +212,19 @@ def _post(instructions: str, input_messages: list, model: str) -> dict:
 
 
 async def _run(
-    instructions: str, input_messages: list, deep: bool = False
+    instructions: str,
+    input_messages: list,
+    deep: bool = False,
+    lookback_hours: Optional[float] = None,
 ) -> Optional[dict]:
     """Shared entry: returns {'text', 'citations'} or None if Grok is off."""
     if not config.ENABLE_GROK:
         return None
     model = config.GROK_MODEL_DEEP if deep else config.GROK_MODEL
     try:
-        data = await asyncio.to_thread(_post, instructions, input_messages, model)
+        data = await asyncio.to_thread(
+            _post, instructions, input_messages, model, lookback_hours
+        )
     except requests.exceptions.Timeout:
         return {
             "text": "⚠️ That took too long to research. Try a more specific "
@@ -314,6 +332,12 @@ def _news_instructions(team_context: str) -> str:
         "general injury news with no free-agent consequence here, do NOT repeat "
         "well-known season-long situations, and do NOT pad. Two or three real "
         "items beat ten filler ones. "
+        "\n\nDATE EVERY ITEM. Say when the news broke — 'ruled out this "
+        "afternoon', 'reported Tuesday'. Search results run older than the "
+        "window asked for, and a day-old story presented as breaking is worse "
+        "than silence, because it sends the user after a player the league has "
+        "already claimed. If you cannot establish that something broke inside "
+        "the window, leave it out. "
         "\n\nIf nothing in the window is genuinely actionable for this team, "
         "reply with exactly: NOTHING ACTIONABLE. Say that rather than "
         "manufacturing an alert — a false alarm costs more than a miss. "
@@ -336,4 +360,5 @@ async def breaking_news(team_context: str, lookback_hours: int = 5) -> Optional[
         _news_instructions(team_context),
         [{"role": "user", "content": question}],
         deep=False,
+        lookback_hours=lookback_hours,
     )

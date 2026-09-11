@@ -996,6 +996,63 @@ async def job_fa_watch(context: ContextTypes.DEFAULT_TYPE) -> None:
     await _push(context, "\n".join(lines))
 
 
+def _players_named(ctx: analysis.LeagueContext, text: str) -> list[str]:
+    """Fantasy-relevant players whose full name appears in the text."""
+    out = []
+    for pid, p in ctx.players.items():
+        if (p.get("position") or "") not in ("QB", "RB", "WR", "TE"):
+            continue
+        name = player_name(p)
+        # Full name only; a surname match would catch the wrong player.
+        if len(name) > 6 and name in text:
+            out.append(pid)
+    return out
+
+
+def _availability_check(ctx: analysis.LeagueContext, text: str) -> str:
+    """Verify every player named in an alert against the live rosters.
+
+    Whether someone is actually available is a fact in Sleeper, not a judgment
+    for the model to make by reading a long roster list — and getting it wrong
+    is the most expensive kind of error here, because it sends you after a
+    player the league already claimed. Checked deterministically, and stated
+    even when the alert got it right.
+    """
+    named = _players_named(ctx, text)
+    if not named:
+        return ""
+
+    owner_of: dict[str, str] = {}
+    for r in ctx.rosters:
+        who = ctx.team_name(r.get("owner_id", ""))
+        if r.get("owner_id") == ctx.my_user_id:
+            who = "YOU"
+        for pid in r.get("players") or []:
+            owner_of[pid] = who
+
+    lines, contradicted = [], False
+    urges_add = any(w in text.lower() for w in ("add", "claim", "pick up", "free agent"))
+    for pid in named:
+        name = player_name(ctx.players.get(pid) or {})
+        owner = owner_of.get(pid)
+        if owner is None:
+            lines.append(f"• {name} — FREE AGENT, available now")
+        elif owner == "YOU":
+            lines.append(f"• {name} — already on your roster")
+        else:
+            lines.append(f"• {name} — ROSTERED by {owner}, not available")
+            if urges_add:
+                contradicted = True
+
+    header = "Availability, checked against Sleeper just now:"
+    if contradicted:
+        header = (
+            "⚠️ CORRECTION — at least one player above is NOT available. "
+            "Checked against Sleeper just now:"
+        )
+    return header + "\n" + "\n".join(lines)
+
+
 async def _run_news_scan(context: ContextTypes.DEFAULT_TYPE) -> Optional[str]:
     """Shared body for the scheduled watch and the /news command."""
     ctx = await _ctx(force=True)
@@ -1010,6 +1067,9 @@ async def _run_news_scan(context: ContextTypes.DEFAULT_TYPE) -> Optional[str]:
         return None
     if "NOTHING ACTIONABLE" in text.upper():
         return ""
+    check = _availability_check(ctx, text)
+    if check:
+        text += "\n\n" + check
     cites = result.get("citations") or []
     if cites:
         text += "\n\nSources:\n" + "\n".join(f"• {c}" for c in cites[:3])
@@ -1065,10 +1125,8 @@ async def job_news_watch(context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
         ctx = await _ctx()
         named = {
-            player_name(p)
-            for p in ctx.players.values()
-            if (p.get("position") or "") in ("QB", "RB", "WR", "TE")
-            and player_name(p) in text
+            player_name(ctx.players.get(pid) or {})
+            for pid in _players_named(ctx, text)
         }
     except Exception:
         named = set()
