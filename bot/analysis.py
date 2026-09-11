@@ -891,6 +891,197 @@ def scoring_context(ctx: LeagueContext) -> str:
 _OPENS_A_JOB = {"Out", "IR", "PUP", "Sus", "Suspended", "NA", "DNR", "Doubtful"}
 
 
+# Practice participation, which moves days before a game status does. Sleeper
+# exposes it under a couple of names depending on the feed, so read both.
+def _practice(player: dict) -> str:
+    return str(
+        player.get("practice_participation")
+        or player.get("practice_description")
+        or ""
+    ).strip()
+
+
+def _practice_risk(text: str) -> Optional[str]:
+    """How worrying a practice line is: 'out' > 'limited' > None."""
+    low = text.lower()
+    if not low:
+        return None
+    if "did not" in low or low in ("dnp", "out"):
+        return "out"
+    if "limited" in low:
+        return "limited"
+    return None
+
+
+# Game statuses that mean a player might not go, short of being ruled out.
+_DOUBTFUL = {"Questionable", "Doubtful"}
+
+
+def at_risk_players(ctx: LeagueContext, min_value: float = 20.0) -> list[dict]:
+    """Starters who might not play, and who would inherit the work.
+
+    This is the look-ahead layer and the earliest signal available anywhere.
+    A missed Wednesday practice precedes a Friday designation, which precedes
+    Sunday inactives, which precedes the injury flag everyone else is watching.
+    Acting here means claiming the backup while he is still free, rather than
+    bidding against the whole league once the job has visibly opened.
+    """
+    out = []
+    for pid, p in ctx.players.items():
+        if (p.get("position") or "") not in valuation.VALUED_POSITIONS:
+            continue
+        status = p.get("injury_status") or ""
+        practice = _practice(p)
+        risk = _practice_risk(practice)
+        if status in _OPENS_A_JOB:
+            continue  # Already out; that is an opening, not a risk.
+        if status not in _DOUBTFUL and risk is None:
+            continue
+        value = (ctx.player_values.get(pid) or {}).get("base_score", 0.0)
+        if value < min_value:
+            continue
+
+        heirs = []
+        for heir in valuation.next_man_up(ctx, pid, limit=1):
+            hp = ctx.players.get(heir) or {}
+            heirs.append(
+                {
+                    "name": player_name(hp),
+                    "rostered": heir in ctx.rostered_ids,
+                    "contingent": valuation.contingent_value(ctx, heir),
+                }
+            )
+        out.append(
+            {
+                "player_id": pid,
+                "name": player_name(p),
+                "position": p.get("position"),
+                "team": p.get("team"),
+                "status": status,
+                "practice": practice,
+                "risk": risk or ("out" if status == "Doubtful" else "limited"),
+                "body_part": p.get("injury_body_part") or "",
+                "value": value,
+                "mine": pid in set(ctx.my_roster.get("players") or []),
+                "heirs": heirs,
+            }
+        )
+    # Worst risk first, then by how much the player matters.
+    out.sort(key=lambda e: (e["risk"] == "out", e["value"]), reverse=True)
+    return out
+
+
+def at_risk_context(ctx: LeagueContext, limit: int = 10) -> str:
+    """The at-risk board, for the model's context."""
+    rows = at_risk_players(ctx)
+    if not rows:
+        return ""
+    lines = [
+        "AT RISK — starters who may not play, from practice participation and "
+        "game status. This runs AHEAD of the injury flag everyone else "
+        "watches: a missed Wednesday practice precedes a Friday designation "
+        "precedes Sunday inactives. Where the heir is still a free agent, "
+        "that is a claim to make NOW, while he is free, rather than bidding "
+        "against the league once the job visibly opens:"
+    ]
+    for e in rows[:limit]:
+        bits = [b for b in (e["status"], e["practice"], e["body_part"]) if b]
+        who = " · ".join(bits)
+        line = (
+            f"  {e['name']} ({e['position']}-{e['team']}, value {e['value']})"
+            f" — {who}"
+        )
+        if e["mine"]:
+            line += " [YOURS]"
+        for h in e["heirs"]:
+            line += (
+                f"\n     heir: {h['name']} (contingent {h['contingent']}) — "
+                + ("FREE AGENT" if not h["rostered"] else "rostered")
+            )
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def detect_practice_downgrades(ctx: LeagueContext, min_value: float = 20.0) -> list[dict]:
+    """Players whose practice participation got worse since the last check.
+
+    The transition is the signal, not the level: full to limited, or limited
+    to did-not-participate. A player who has been limited all season is not
+    news; one who was full on Wednesday and sat on Thursday is.
+    """
+    order = {"": 0, "limited": 1, "out": 2}
+    current = {
+        pid: _practice(p)
+        for pid, p in ctx.players.items()
+        if (p.get("position") or "") in valuation.VALUED_POSITIONS and p.get("team")
+    }
+    previous = journal.load_state("practice_status")
+    journal.save_state("practice_status", current)
+    if not previous:
+        return []
+
+    worse = []
+    for pid, now in current.items():
+        if pid not in previous:
+            continue
+        before = previous[pid]
+        if order.get(_practice_risk(now) or "", 0) <= order.get(
+            _practice_risk(before) or "", 0
+        ):
+            continue
+        p = ctx.players.get(pid) or {}
+        if (p.get("injury_status") or "") in _OPENS_A_JOB:
+            continue  # Already ruled out; the opening covers it.
+        value = (ctx.player_values.get(pid) or {}).get("base_score", 0.0)
+        if value < min_value:
+            continue
+        heirs = []
+        for heir in valuation.next_man_up(ctx, pid, limit=1):
+            hp = ctx.players.get(heir) or {}
+            heirs.append(
+                {
+                    "name": player_name(hp),
+                    "rostered": heir in ctx.rostered_ids,
+                    "contingent": valuation.contingent_value(ctx, heir),
+                }
+            )
+        worse.append(
+            {
+                "name": player_name(p),
+                "position": p.get("position"),
+                "team": p.get("team"),
+                "from": before or "full",
+                "to": now or "unknown",
+                "body_part": p.get("injury_body_part") or "",
+                "value": value,
+                "mine": pid in set(ctx.my_roster.get("players") or []),
+                "heirs": heirs,
+            }
+        )
+    worse.sort(key=lambda e: e["value"], reverse=True)
+    return worse
+
+
+def format_practice_downgrades(rows: list[dict]) -> str:
+    if not rows:
+        return ""
+    lines = []
+    for e in rows:
+        head = (
+            f"<b>{e['name']}</b> ({e['position']}-{e['team']}) — practice "
+            f"{e['from']} → <b>{e['to']}</b>"
+        )
+        if e["body_part"]:
+            head += f" ({e['body_part']})"
+        if e["mine"]:
+            head += " · <i>yours</i>"
+        lines.append(head)
+        for h in e["heirs"]:
+            where = "FREE AGENT — claim before he's ruled out" if not h["rostered"] else "rostered"
+            lines.append(f"   ↳ {h['name']} (contingent {h['contingent']}) — <b>{where}</b>")
+    return "\n".join(lines)
+
+
 def current_openings(ctx: LeagueContext, min_value: float = 25.0) -> list[dict]:
     """Every job currently open, whether or not it opened since the last check.
 
@@ -1396,6 +1587,7 @@ async def full_league_context(ctx: LeagueContext, client: SleeperClient) -> str:
         bye_outlook_context(ctx),
         usage_movers_context(ctx),
         usage_faders_context(ctx),
+        at_risk_context(ctx),
         signal_conflicts_context(ctx),
         journal.recent_alerts_context(),
         data_confidence_context(ctx),

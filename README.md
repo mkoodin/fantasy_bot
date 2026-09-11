@@ -43,6 +43,7 @@ trades / lineup optimization auto-upgrade to the flagship model.
 | `/stash` | Who is one injury away from starter value |
 | `/bench` | Why do I own each bench player |
 | `/plan` | The next 2-4 weeks: byes, thin spots, what to buy early |
+| `/atrisk` | Starters who may not play, and whose backup is still free |
 | `/openings` | Jobs open right now from an injury, and who inherits them |
 | `/news` | Scan X + news now for anything actionable on your wire |
 | `/trending` | Most-added players across Sleeper right now |
@@ -70,7 +71,11 @@ chosen around when the decision is actually made, not around convenience:
 
 Plus three watches, fastest first:
 
-- **Depth-chart watch — every 15 min.** The one that beats the market. It diffs
+- **Depth-chart watch — every 15 min.** Two signals, and the first one is the
+  earliest available anywhere: a **practice downgrade** (full → limited → did
+  not participate). That precedes a Friday designation, which precedes Sunday
+  inactives, which precedes the injury flag most tools watch — so the backup
+  is still free when it fires. The second is a **job actually opening**: The one that beats the market. It diffs
   Sleeper's own injury flags against the last run, and the moment a starter is
   flagged out it derives the beneficiary from the depth chart and says whether
   he's still unrostered in your league. No model call, so it costs nothing and

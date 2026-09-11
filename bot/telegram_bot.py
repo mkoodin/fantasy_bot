@@ -66,6 +66,7 @@ HELP_TEXT = (
     "<b>/stash</b> — who is one injury away from starter value\n"
     "<b>/bench</b> — why do I own each bench player\n"
     "<b>/plan</b> — the next 2-4 weeks: byes, thin spots, buy early\n"
+    "<b>/atrisk</b> — starters who may not play, and whose backup is still free\n"
     "<b>/openings</b> — jobs just opened by an injury, and who inherits\n"
     "<b>/news</b> — scan X + news now for anything actionable on your wire\n"
     "<b>/trending</b> — most-added players across Sleeper right now\n"
@@ -247,6 +248,8 @@ def build_guide() -> str:
         "• <b>/tradecheck</b> A for B — price a specific offer",
         "• <b>/waivers</b> — targets, bids, and who to drop for each",
         "• <b>/drops</b> — who's droppable (never a starter or an IR stash)",
+        "• <b>/atrisk</b> — who may not play, and whose backup is still free",
+        "• <b>/openings</b> — jobs already open, and who inherits them",
         "• <b>/roster</b> · <b>/needs</b> · <b>/trending</b> · <b>/gameday</b>",
         "• <b>/diag</b> — what data loaded, and is the journal durable",
         "",
@@ -1085,6 +1088,49 @@ async def _run_news_scan(context: ContextTypes.DEFAULT_TYPE) -> Optional[str]:
 
 
 @authorized_only
+async def cmd_atrisk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Starters who may not play, and whose backup is still free: /atrisk."""
+    await _typing(update)
+    try:
+        ctx = await _ctx(force=True)
+        rows = analysis.at_risk_players(ctx)
+    except Exception as exc:
+        await _send(update, f"⚠️ Couldn't check: <code>{digest.esc(exc)}</code>")
+        return
+    if not rows:
+        await _send(
+            update,
+            "✅ No starter of consequence is carrying a practice or game-status "
+            "flag right now.",
+        )
+        return
+
+    free = [r for r in rows if any(not h["rostered"] for h in r["heirs"])]
+    lines = ["🟡 <b>At risk — and who inherits</b>", ""]
+    for e in rows[:10]:
+        bits = [b for b in (e["status"], e["practice"], e["body_part"]) if b]
+        line = (
+            f"<b>{digest.esc(e['name'])}</b> ({e['position']}-{e['team']}) — "
+            f"{digest.esc(' · '.join(bits))}"
+        )
+        if e["mine"]:
+            line += " <i>[yours]</i>"
+        for h in e["heirs"]:
+            tag = "FREE AGENT" if not h["rostered"] else "rostered"
+            line += (
+                f"\n   ↳ {digest.esc(h['name'])} "
+                f"(contingent {h['contingent']}) — <b>{tag}</b>"
+            )
+        lines.append(line)
+    if free:
+        lines.append(
+            "\n<i>The free ones are the point: claim them while the starter is "
+            "only questionable, not after he's ruled out.</i>"
+        )
+    await _send(update, "\n".join(lines))
+
+
+@authorized_only
 async def cmd_openings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Jobs that just opened, and who inherits them: /openings."""
     await _typing(update)
@@ -1147,27 +1193,42 @@ async def job_depth_watch(context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
         ctx = await _ctx(force=True)
         events = analysis.detect_injury_events(ctx)
+        downgrades = analysis.detect_practice_downgrades(ctx)
     except Exception as exc:
         logger.warning("Depth watch failed: %s", exc)
         return
-    if not events:
+    if not events and not downgrades:
         return
 
-    body = analysis.format_injury_events(events)
-    await _push(
-        context,
-        "🚨 <b>Starter ruled out — beneficiary below</b>\n\n" + body,
-    )
+    parts = []
+    if events:
+        parts.append(
+            "🚨 <b>Starter ruled out — beneficiary below</b>\n\n"
+            + analysis.format_injury_events(events)
+        )
+    if downgrades:
+        # Deliberately separate from an opening: nothing has happened yet, and
+        # that is the point — this is the window before the job visibly opens.
+        parts.append(
+            "🟡 <b>Practice downgrade — get ahead of it</b>\n\n"
+            + analysis.format_practice_downgrades(downgrades)
+        )
+    await _push(context, "\n\n".join(parts))
     if config.JOURNAL_ENABLED:
-        journal.record(
-            "alert",
-            ctx.week,
-            "; ".join(
+        summary = "; ".join(
+            [
                 f"{e['name']} {e['status']}"
                 + (f" → {e['heirs'][0]['name']}" if e["heirs"] else "")
                 for e in events[:3]
-            ),
-            players=[e["name"] for e in events[:6]],
+            ]
+            + [f"{d['name']} practice {d['to']}" for d in downgrades[:3]]
+        )
+        journal.record(
+            "alert",
+            ctx.week,
+            summary,
+            players=[e["name"] for e in events[:4]]
+            + [d["name"] for d in downgrades[:4]],
         )
 
 
@@ -1533,6 +1594,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("trending", cmd_trending))
     app.add_handler(CommandHandler("news", cmd_news))
     app.add_handler(CommandHandler("openings", cmd_openings))
+    app.add_handler(CommandHandler("atrisk", cmd_atrisk))
     app.add_handler(CommandHandler("review", cmd_review))
     app.add_handler(CommandHandler("journal", cmd_journal))
     app.add_handler(CommandHandler("log", cmd_log))
