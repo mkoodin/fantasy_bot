@@ -1047,6 +1047,7 @@ def detect_practice_downgrades(ctx: LeagueContext, min_value: float = 20.0) -> l
             )
         worse.append(
             {
+                "player_id": pid,
                 "name": player_name(p),
                 "position": p.get("position"),
                 "team": p.get("team"),
@@ -1076,10 +1077,43 @@ def format_practice_downgrades(rows: list[dict]) -> str:
         if e["mine"]:
             head += " · <i>yours</i>"
         lines.append(head)
+        if e.get("why"):
+            lines.append(f"   <i>{e['why']}</i>")
         for h in e["heirs"]:
             where = "FREE AGENT — claim before he's ruled out" if not h["rostered"] else "rostered"
             lines.append(f"   ↳ {h['name']} (contingent {h['contingent']}) — <b>{where}</b>")
     return "\n".join(lines)
+
+
+def material_only(ctx: LeagueContext, events: list[dict]) -> list[dict]:
+    """Keep only the events worth interrupting for, and say why each qualified.
+
+    Two things make a sidelined player your problem. Either he is a starter of
+    yours, so your lineup changes; or the man who inherits his work is a free
+    agent in this league and worth having, so there is a claim to make. A star
+    going down on another roster whose backup is already owned is news you can
+    do nothing with, and an alert you cannot act on is just noise.
+    """
+    kept = []
+    for e in events:
+        tier = ctx.roster_tiers.get(e["player_id"], "")
+        heirs = e.get("heirs") or []
+        claim = [
+            h
+            for h in heirs
+            if not h["rostered"] and h["contingent"] >= config.ALERT_MIN_CONTINGENT
+        ]
+        if e.get("mine") and tier in ("CORE", "STARTER"):
+            e["why"] = "your starter — this changes your lineup"
+        elif claim:
+            e["why"] = f"{claim[0]['name']} is free here and worth claiming"
+        else:
+            continue
+        # Rank your own players above other people's, then by what's at stake.
+        e["_rank"] = (1 if e.get("mine") else 0, e.get("value", 0.0))
+        kept.append(e)
+    kept.sort(key=lambda x: x["_rank"], reverse=True)
+    return kept[: config.ALERT_MAX_ITEMS]
 
 
 def current_openings(ctx: LeagueContext, min_value: float = 25.0) -> list[dict]:

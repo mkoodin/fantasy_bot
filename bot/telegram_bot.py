@@ -1192,8 +1192,13 @@ async def job_depth_watch(context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     try:
         ctx = await _ctx(force=True)
-        events = analysis.detect_injury_events(ctx)
-        downgrades = analysis.detect_practice_downgrades(ctx)
+        # Detect everything, then push only what is actionable. The detectors
+        # must still run in full so their snapshots advance — filtering before
+        # the diff would leave the ignored changes to fire again next time.
+        events = analysis.material_only(ctx, analysis.detect_injury_events(ctx))
+        downgrades = analysis.material_only(
+            ctx, analysis.detect_practice_downgrades(ctx)
+        )
     except Exception as exc:
         logger.warning("Depth watch failed: %s", exc)
         return

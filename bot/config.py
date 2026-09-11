@@ -178,6 +178,14 @@ FA_WATCH_END_HOUR = int(os.getenv("FA_WATCH_END_HOUR", "23"))
 # than when the news catches up.
 DEPTH_WATCH_ENABLED = _flag("DEPTH_WATCH_ENABLED")
 DEPTH_WATCH_MINUTES = float(os.getenv("DEPTH_WATCH_MINUTES", "15"))
+# Materiality. Pushing interrupts; asking does not — so alerts are filtered
+# hard and the on-demand boards stay generous. Wednesday practice reports run
+# to dozens of names league-wide, and a channel that fires for all of them
+# gets muted, which costs more than the alerts were worth.
+# A downgrade is worth an alert only if it changes YOUR lineup, or if the man
+# who inherits the work is a free agent here and actually worth claiming.
+ALERT_MIN_CONTINGENT = float(os.getenv("ALERT_MIN_CONTINGENT", "15"))
+ALERT_MAX_ITEMS = int(os.getenv("ALERT_MAX_ITEMS", "4"))
 
 # --- Breaking-news watch ----------------------------------------------------
 # The FA watch above is a LAGGING signal: it fires once a player is already

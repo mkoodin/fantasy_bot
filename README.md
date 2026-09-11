@@ -83,6 +83,15 @@ Plus three watches, fastest first:
   benefits — by the time enough people have posted "go get the backup" for a
   search to surface it, he's gone. The job is knowable the instant the starter
   is flagged.
+
+  **It only interrupts you for two things**: a starter of *yours* going down,
+  which changes your lineup; or someone else's starter whose replacement is a
+  free agent here and worth claiming. A star going down on another roster whose
+  backup is already owned is news you can't act on. Wednesday practice reports
+  run to dozens of names league-wide, and a channel that fires for all of them
+  gets muted — which costs more than the alerts were worth. Pushing interrupts,
+  asking doesn't, so `/atrisk` and `/openings` show the full board while alerts
+  stay scarce (`ALERT_MIN_CONTINGENT`, `ALERT_MAX_ITEMS`).
 - **Breaking-news watch — every 3h.** Reads X and the news directly for role
   changes an injury flag won't show, and only speaks when the beneficiary is
   actually free here.
