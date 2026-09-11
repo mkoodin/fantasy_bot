@@ -887,6 +887,141 @@ def scoring_context(ctx: LeagueContext) -> str:
     )
 
 
+# Statuses that take a player off the field, and so open a job behind him.
+_OPENS_A_JOB = {"Out", "IR", "PUP", "Sus", "Suspended", "NA", "DNR", "Doubtful"}
+
+
+def current_openings(ctx: LeagueContext, min_value: float = 25.0) -> list[dict]:
+    """Every job currently open, whether or not it opened since the last check.
+
+    A standing board rather than a diff, because the on-demand question is
+    "what is available right now", and because a diff has to consume the
+    change it reports — two callers sharing one destructive read would
+    cannibalise each other's events.
+    """
+    return _openings(
+        ctx,
+        [
+            pid
+            for pid, p in ctx.players.items()
+            if (p.get("injury_status") or "") in _OPENS_A_JOB
+        ],
+        min_value,
+    )
+
+
+def _openings(ctx: LeagueContext, pids: list[str], min_value: float) -> list[dict]:
+    """Shared shaping for a set of sidelined players."""
+    events = []
+    for pid in pids:
+        p = ctx.players.get(pid) or {}
+        if (p.get("position") or "") not in valuation.VALUED_POSITIONS:
+            continue
+        value = (ctx.player_values.get(pid) or {}).get("base_score", 0.0)
+        if value < min_value:
+            continue
+        heirs = []
+        for heir in valuation.next_man_up(ctx, pid):
+            hp = ctx.players.get(heir) or {}
+            dc = valuation.depth_chart(ctx, heir)
+            heirs.append(
+                {
+                    "player_id": heir,
+                    "name": player_name(hp),
+                    "depth": dc[0] if dc else None,
+                    "rostered": heir in ctx.rostered_ids,
+                    "mine": heir in set(ctx.my_roster.get("players") or []),
+                    "contingent": valuation.contingent_value(ctx, heir),
+                }
+            )
+        events.append(
+            {
+                "player_id": pid,
+                "name": player_name(p),
+                "position": p.get("position"),
+                "team": p.get("team"),
+                "status": p.get("injury_status") or "",
+                "was": "healthy",
+                "value": value,
+                "mine": pid in set(ctx.my_roster.get("players") or []),
+                "heirs": heirs,
+            }
+        )
+    events.sort(key=lambda e: e["value"], reverse=True)
+    return events
+
+
+def detect_injury_events(ctx: LeagueContext, min_value: float = 25.0) -> list[dict]:
+    """Starters who have just been ruled out, and who inherits their work.
+
+    Triggered off Sleeper's own injury flags rather than off news coverage.
+    Waiting to READ that someone benefits is structurally too late — the
+    beneficiary is knowable the moment the starter is flagged, and the window
+    to claim him closes as soon as the rest of the league reads the same post.
+
+    Returns [] on the first run, which only records a baseline: without a
+    previous snapshot every currently-injured player would look like news.
+    """
+    current = {
+        pid: (p.get("injury_status") or "")
+        for pid, p in ctx.players.items()
+        if (p.get("position") or "") in valuation.VALUED_POSITIONS and p.get("team")
+    }
+    previous = journal.load_state("injury_status")
+    journal.save_state("injury_status", current)
+    if not previous:
+        return []
+
+    newly_out = [
+        pid
+        for pid, status in current.items()
+        # Was known and healthy before; is sidelined now.
+        if status in _OPENS_A_JOB
+        and previous.get(pid) is not None
+        and previous.get(pid) not in _OPENS_A_JOB
+    ]
+    events = _openings(ctx, newly_out, min_value)
+    for e in events:
+        e["was"] = previous.get(e["player_id"]) or "healthy"
+    return events
+
+
+def format_injury_events(events: list[dict]) -> str:
+    """Render events as an alert that leads with the action."""
+    if not events:
+        return ""
+    lines = []
+    for e in events:
+        free = [h for h in e["heirs"] if not h["rostered"]]
+        head = (
+            f"<b>{e['name']}</b> ({e['position']}-{e['team']}) — "
+            f"{e['was']} → <b>{e['status']}</b>"
+        )
+        if e["mine"]:
+            head += " · <i>on your roster</i>"
+        lines.append(head)
+        if not e["heirs"]:
+            lines.append("   ↳ no clear backup on the depth chart")
+            continue
+        for h in e["heirs"]:
+            where = (
+                "YOURS" if h["mine"]
+                else "FREE AGENT — claim now" if not h["rostered"]
+                else "already rostered"
+            )
+            depth = f"depth #{h['depth']}" if h["depth"] else "next by value"
+            lines.append(
+                f"   ↳ {h['name']} ({depth}, contingent value "
+                f"{h['contingent']}) — <b>{where}</b>"
+            )
+        if free:
+            lines.append(
+                "   <i>Act before this is widely reported — availability can "
+                "change within minutes. If he is gone, check waivers.</i>"
+            )
+    return "\n".join(lines)
+
+
 def usage_movers_context(ctx: LeagueContext, limit: int = 12) -> str:
     """Players whose role is growing, ranked by how much — and who owns them.
 

@@ -185,3 +185,45 @@ def recent_alerts_context(hours: float = 12.0) -> str:
     for e in alerts[-4:]:
         lines.append(f"  [{e.get('ts','')[:16]}] {e.get('summary','')}")
     return "\n".join(lines)
+
+
+# --- Small durable state, alongside the journal ------------------------------
+# Detecting that something CHANGED requires remembering what it was. This is
+# deliberately separate from the decision log: it is machine state, rewritten
+# constantly, and it should not push decisions out of a bounded history.
+
+
+def _state_path() -> str:
+    base = _path()
+    return base[:-5] + "_state.json" if base.endswith(".json") else base + ".state"
+
+
+def load_state(key: str) -> dict:
+    try:
+        with open(_state_path(), "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data.get(key) or {}
+    except (FileNotFoundError, json.JSONDecodeError, OSError, AttributeError):
+        return {}
+
+
+def save_state(key: str, value: dict) -> bool:
+    path = _state_path()
+    with _lock:
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                blob = json.load(fh)
+            if not isinstance(blob, dict):
+                blob = {}
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            blob = {}
+        blob[key] = value
+        try:
+            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+            fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or ".", suffix=".tmp")
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump(blob, fh)
+            os.replace(tmp, path)
+            return True
+        except OSError:
+            return False

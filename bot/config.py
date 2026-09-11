@@ -171,6 +171,14 @@ FA_WATCH_MIN_ADDS = int(os.getenv("FA_WATCH_MIN_ADDS", "4000"))
 FA_WATCH_START_HOUR = int(os.getenv("FA_WATCH_START_HOUR", "8"))
 FA_WATCH_END_HOUR = int(os.getenv("FA_WATCH_END_HOUR", "23"))
 
+# --- Depth-chart watch ------------------------------------------------------
+# Diffs Sleeper's injury flags against the last run and derives the beneficiary
+# from the depth chart. Costs no model call, so it runs often: the value is
+# being first, and a job is knowable the moment the starter is flagged rather
+# than when the news catches up.
+DEPTH_WATCH_ENABLED = _flag("DEPTH_WATCH_ENABLED")
+DEPTH_WATCH_MINUTES = float(os.getenv("DEPTH_WATCH_MINUTES", "15"))
+
 # --- Breaking-news watch ----------------------------------------------------
 # The FA watch above is a LAGGING signal: it fires once a player is already
 # being added league-wide, by which point your leaguemates have seen the same

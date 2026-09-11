@@ -975,3 +975,31 @@ def rival_intel_context(ctx: Any) -> str:
             + f" · ${ctx.faab_total - used} FAAB"
         )
     return "\n".join(lines)
+
+
+def next_man_up(ctx: Any, pid: str, limit: int = 2) -> list[str]:
+    """Who inherits the job if this player cannot play.
+
+    Derived from the depth chart and value rather than from anyone saying so.
+    That is the entire point: the moment a starter is ruled out, his backup is
+    knowable immediately, and waiting until enough people have posted about it
+    means arriving after the player is gone.
+    """
+    p = ctx.players.get(pid) or {}
+    pos, team = p.get("position"), p.get("team")
+    if pos not in ("QB", "RB", "WR", "TE") or not team:
+        return []
+
+    peers = []
+    for other, op in ctx.players.items():
+        if other == pid or op.get("team") != team or op.get("position") != pos:
+            continue
+        if (op.get("injury_status") or "") in ("Out", "IR", "PUP", "Sus", "NA"):
+            continue
+        dc = depth_chart(ctx, other)
+        order = dc[0] if dc else 99
+        score = (ctx.player_values.get(other) or {}).get("base_score", 0.0)
+        # Depth chart first where it exists, value as the tiebreak and fallback.
+        peers.append((order, -score, other))
+    peers.sort()
+    return [x[2] for x in peers[:limit]]

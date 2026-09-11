@@ -66,6 +66,7 @@ HELP_TEXT = (
     "<b>/stash</b> — who is one injury away from starter value\n"
     "<b>/bench</b> — why do I own each bench player\n"
     "<b>/plan</b> — the next 2-4 weeks: byes, thin spots, buy early\n"
+    "<b>/openings</b> — jobs just opened by an injury, and who inherits\n"
     "<b>/news</b> — scan X + news now for anything actionable on your wire\n"
     "<b>/trending</b> — most-added players across Sleeper right now\n"
     "<b>/player &lt;name&gt;</b> — outlook + availability + FAAB bid for any player\n"
@@ -219,6 +220,13 @@ def build_guide() -> str:
             f"{label}\n   <i>{why}</i>"
         )
     watches = []
+    if config.DEPTH_WATCH_ENABLED:
+        watches.append(
+            f"• <b>Every {config.DEPTH_WATCH_MINUTES:g} min</b> — depth-chart "
+            "watch: the moment Sleeper flags a starter out, names who inherits "
+            "the job and whether he's still free here (no model, so it's free "
+            "and fast — this is the one that beats the market)"
+        )
     if config.NEWS_WATCH_ENABLED and config.ENABLE_GROK:
         watches.append(
             f"• <b>Every {config.NEWS_WATCH_HOURS:g}h</b> — breaking-news watch: reads X "
@@ -1077,6 +1085,33 @@ async def _run_news_scan(context: ContextTypes.DEFAULT_TYPE) -> Optional[str]:
 
 
 @authorized_only
+async def cmd_openings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Jobs that just opened, and who inherits them: /openings."""
+    await _typing(update)
+    try:
+        ctx = await _ctx(force=True)
+        # A standing board, not the watch's diff: asking must not consume the
+        # events the scheduled watch is there to push.
+        events = analysis.current_openings(ctx)
+    except Exception as exc:
+        await _send(update, f"⚠️ Couldn't check: <code>{digest.esc(exc)}</code>")
+        return
+    open_now = [e for e in events if any(not h["rostered"] for h in e["heirs"])]
+    if not open_now:
+        await _send(
+            update,
+            "✅ No sidelined starter has an unrostered backup right now — "
+            "every open job in the league has already been claimed.",
+        )
+        return
+    await _send(
+        update,
+        "🚨 <b>Open jobs with a free beneficiary</b>\n\n"
+        + analysis.format_injury_events(open_now[:6]),
+    )
+
+
+@authorized_only
 async def cmd_news(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """On-demand breaking-news sweep: /news."""
     await _typing(update)
@@ -1098,6 +1133,42 @@ async def cmd_news(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
     else:
         await _send(update, "📡 <b>Breaking — act on this</b>\n\n" + digest.esc(text))
+
+
+async def job_depth_watch(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Fire the instant Sleeper flags a starter out, not when news says so.
+
+    Runs far more often than the news sweep because it costs nothing — no
+    model call, just a diff of Sleeper's injury flags against the last
+    snapshot — and because being first is the entire value. The beneficiary
+    comes off the depth chart, so the alert does not wait for anyone to write
+    the takeaway.
+    """
+    try:
+        ctx = await _ctx(force=True)
+        events = analysis.detect_injury_events(ctx)
+    except Exception as exc:
+        logger.warning("Depth watch failed: %s", exc)
+        return
+    if not events:
+        return
+
+    body = analysis.format_injury_events(events)
+    await _push(
+        context,
+        "🚨 <b>Starter ruled out — beneficiary below</b>\n\n" + body,
+    )
+    if config.JOURNAL_ENABLED:
+        journal.record(
+            "alert",
+            ctx.week,
+            "; ".join(
+                f"{e['name']} {e['status']}"
+                + (f" → {e['heirs'][0]['name']}" if e["heirs"] else "")
+                for e in events[:3]
+            ),
+            players=[e["name"] for e in events[:6]],
+        )
 
 
 async def job_news_watch(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1287,6 +1358,13 @@ def _register_jobs(app: Application) -> None:
                 globals()[f"job_{kind}_brief"], time=tm, name=f"{kind}_brief"
             )
 
+    if config.DEPTH_WATCH_ENABLED:
+        jq.run_repeating(
+            job_depth_watch,
+            interval=config.DEPTH_WATCH_MINUTES * 60,
+            first=60,
+            name="depth_watch",
+        )
     if config.NEWS_WATCH_ENABLED and config.ENABLE_GROK:
         app.job_queue.run_repeating(
             job_news_watch,
@@ -1454,6 +1532,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("roster", cmd_roster))
     app.add_handler(CommandHandler("trending", cmd_trending))
     app.add_handler(CommandHandler("news", cmd_news))
+    app.add_handler(CommandHandler("openings", cmd_openings))
     app.add_handler(CommandHandler("review", cmd_review))
     app.add_handler(CommandHandler("journal", cmd_journal))
     app.add_handler(CommandHandler("log", cmd_log))
