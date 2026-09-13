@@ -185,6 +185,10 @@ DEPTH_WATCH_MINUTES = float(os.getenv("DEPTH_WATCH_MINUTES", "15"))
 # A downgrade is worth an alert only if it changes YOUR lineup, or if the man
 # who inherits the work is a free agent here and actually worth claiming.
 ALERT_MIN_CONTINGENT = float(os.getenv("ALERT_MIN_CONTINGENT", "15"))
+# How long a story stays "already told you". Held durably rather than in
+# memory: the container restarts on every redeploy, and an in-memory record of
+# what was announced means the same story is announced again afterwards.
+NEWS_SEEN_HOURS = float(os.getenv("NEWS_SEEN_HOURS", "36"))
 ALERT_MAX_ITEMS = int(os.getenv("ALERT_MAX_ITEMS", "4"))
 
 # --- Breaking-news watch ----------------------------------------------------

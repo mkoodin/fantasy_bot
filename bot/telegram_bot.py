@@ -10,7 +10,7 @@ import asyncio
 import logging
 import time
 import re
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from functools import wraps
 from typing import Optional
 
@@ -1080,6 +1080,16 @@ async def _run_news_scan(context: ContextTypes.DEFAULT_TYPE) -> Optional[str]:
         return ""
     check = _availability_check(ctx, text)
     if check:
+        # If the alert's whole point was an add and nobody named is actually
+        # free, it argues with itself: the correction cancels the
+        # recommendation and there is nothing left to act on. Silence beats a
+        # message that negates its own headline.
+        urges_add = any(
+            w in text.lower() for w in ("add", "claim", "pick up", "free agent")
+        )
+        if urges_add and "FREE AGENT" not in check:
+            logger.info("Suppressing alert: nothing named is actually available")
+            return ""
         text += "\n\n" + check
     cites = result.get("citations") or []
     if cites:
@@ -1257,8 +1267,20 @@ async def job_news_watch(context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     # Dedupe on the players named, so a story that stays in the news for a few
-    # cycles is announced once rather than every three hours.
-    seen: set = context.bot_data.setdefault("news_seen", set())
+    # cycles is announced once. Held on disk rather than in memory: a redeploy
+    # or a crash restarts the process, and an in-memory record meant the same
+    # story was announced again the next morning.
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(hours=config.NEWS_SEEN_HOURS)
+    stored = journal.load_state("news_seen") or {}
+    seen = {}
+    for name, when in stored.items():
+        try:
+            if datetime.fromisoformat(when) >= cutoff:
+                seen[name] = when
+        except (TypeError, ValueError):
+            continue
+
     try:
         ctx = await _ctx()
         named = {
@@ -1267,10 +1289,12 @@ async def job_news_watch(context: ContextTypes.DEFAULT_TYPE) -> None:
         }
     except Exception:
         named = set()
-    fresh = named - seen
+    fresh = named - set(seen)
     if named and not fresh:
         return
-    seen.update(named)
+    for name in named:
+        seen[name] = now.isoformat(timespec="seconds")
+    journal.save_state("news_seen", seen)
 
     await _push(context, "📡 <b>Breaking — act on this</b>\n\n" + digest.esc(text))
     # Feed it back into the context so later answers can reconcile with it
