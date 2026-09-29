@@ -118,8 +118,12 @@ X_RESTRICT_TO_HANDLES = os.getenv("X_RESTRICT_TO_HANDLES", "").lower() in (
 # One switch to stop all spending without losing any configuration. Everything
 # that costs money — every scheduled brief, every watch, every model call —
 # goes quiet; the Sleeper-only commands keep working, since they are free.
-# Set PAUSED=false to resume exactly as before.
-PAUSED = _flag("PAUSED", "false")
+#
+# DEFAULT IS PAUSED. Flipped deliberately in September 2026 to stop xAI
+# spend; the bot ships off and has to be switched on. To resume, set
+# PAUSED=false in the environment — an explicit value always wins over this
+# default, so nothing here needs editing again.
+PAUSED = _flag("PAUSED", "true")
 
 ENABLE_GROK = bool(XAI_API_KEY) and not PAUSED
 

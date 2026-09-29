@@ -105,6 +105,10 @@ Plus three watches, fastest first:
 
 ## Pausing
 
+**The bot currently ships paused.** `PAUSED` defaults to true, so a fresh
+deploy comes up spending nothing. Set `PAUSED=false` in the environment to turn
+it on — an explicit value always beats the default.
+
 `PAUSED=true` stops every source of spend: no scheduled briefs, no watches, no
 model calls. Configuration is untouched, so `PAUSED=false` resumes exactly as
 before. The free Sleeper-only commands keep working throughout — `/waivers`,
