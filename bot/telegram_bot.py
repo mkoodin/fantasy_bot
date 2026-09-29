@@ -213,6 +213,14 @@ def build_guide() -> str:
     lines = [
         "🏈 <b>Fantasy GM — how this works</b>",
         "",
+    ]
+    if config.PAUSED:
+        lines += [
+            "⏸ <b>Currently PAUSED</b> — nothing scheduled runs and nothing "
+            "costs money. The instant commands below still work.",
+            "",
+        ]
+    lines += [
         f"<b>📅 What arrives, and when</b> <i>({tz})</i>",
     ]
     for label, why, _, day, tm in _scheduled_rows():
@@ -448,6 +456,16 @@ async def _answer(
     """
     if not question:
         await _send(update, "Ask me anything, e.g. <code>who should I start at FLEX?</code>")
+        return
+    if config.PAUSED:
+        await _send(
+            update,
+            "⏸ <b>Paused.</b> Everything that costs money is off — briefs, "
+            "watches and any question that needs the model.\n\nStill free and "
+            "working: /waivers /drops /openings /atrisk /tradecheck /roster "
+            "/needs /trending /gameday /diag\n\n<i>Set PAUSED=false in Railway "
+            "to resume.</i>",
+        )
         return
     if not config.ENABLE_GROK:
         await _send(
@@ -785,6 +803,8 @@ async def cmd_diag(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     lines = [
         "<b>Diagnostics — what the process sees</b>",
+        ("⏸ <b>PAUSED</b> — no scheduled jobs, no model calls, no spend"
+         if config.PAUSED else "▶️ Running"),
         f"TELEGRAM_TOKEN: {yn(config.TELEGRAM_TOKEN)}",
         f"TELEGRAM_CHAT_ID: {yn(config.TELEGRAM_CHAT_ID)}",
         f"LEAGUE_ID: {yn(config.LEAGUE_ID)}"
@@ -1425,6 +1445,12 @@ job_scout_brief = _brief_job("scout", "SCOUT_BRIEF_DAY")
 
 
 def _register_jobs(app: Application) -> None:
+    if config.PAUSED:
+        logger.warning(
+            "PAUSED=true — no scheduled briefs, watches or model calls. "
+            "On-demand Sleeper commands still work. Unset PAUSED to resume."
+        )
+        return
     jq = app.job_queue
     # Each job runs daily at its time but guards on the target weekday, so we
     # never depend on any library's day-index convention.

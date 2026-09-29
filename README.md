@@ -103,6 +103,20 @@ Plus three watches, fastest first:
 > brief does that job at the point the decision is actually made. Set
 > `PRE_DIGEST_ENABLED=true` to restore it.
 
+## Pausing
+
+`PAUSED=true` stops every source of spend: no scheduled briefs, no watches, no
+model calls. Configuration is untouched, so `PAUSED=false` resumes exactly as
+before. The free Sleeper-only commands keep working throughout — `/waivers`,
+`/drops`, `/openings`, `/atrisk`, `/tradecheck`, `/roster`, `/needs`,
+`/trending`, `/gameday`, `/diag` — and `/diag` shows the paused state up top.
+
+Where the money goes, if you're trimming rather than stopping: the recurring
+cost is the **breaking-news watch** (a model call with live search every
+`NEWS_WATCH_HOURS`, the single largest line) and the **eight weekly briefs**.
+Chat questions are user-initiated and bounded. The depth-chart watch, and every
+command listed above, cost nothing at all.
+
 ## Setup
 
 1. **Create a Telegram bot** with [@BotFather](https://t.me/BotFather) → copy

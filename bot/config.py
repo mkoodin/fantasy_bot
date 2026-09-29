@@ -33,6 +33,10 @@ def _load_dotenv() -> None:
 _load_dotenv()
 
 
+def _flag(name: str, default: str = "true") -> bool:
+    return os.getenv(name, default).lower() in ("1", "true", "yes", "on")
+
+
 def _parse_time(value: str, default: str) -> time:
     """Parse 'HH:MM' into a tz-aware time in the configured timezone."""
     hh, mm = (value or default).split(":")
@@ -110,7 +114,14 @@ GROK_TEMPERATURE = float(os.getenv("GROK_TEMPERATURE", "0.3"))
 X_RESTRICT_TO_HANDLES = os.getenv("X_RESTRICT_TO_HANDLES", "").lower() in (
     "1", "true", "yes", "on"
 )
-ENABLE_GROK = bool(XAI_API_KEY)
+# --- Pause -------------------------------------------------------------------
+# One switch to stop all spending without losing any configuration. Everything
+# that costs money — every scheduled brief, every watch, every model call —
+# goes quiet; the Sleeper-only commands keep working, since they are free.
+# Set PAUSED=false to resume exactly as before.
+PAUSED = _flag("PAUSED", "false")
+
+ENABLE_GROK = bool(XAI_API_KEY) and not PAUSED
 
 # --- Scheduling -------------------------------------------------------------
 TIMEZONE = ZoneInfo(os.getenv("TIMEZONE", "America/New_York"))
@@ -121,10 +132,6 @@ TIMEZONE = ZoneInfo(os.getenv("TIMEZONE", "America/New_York"))
 # Monday Night Football is not over until ~11:30pm Monday, so any bid set on
 # Monday evening is priced on incomplete information. Tuesday evening is the
 # real deadline. Each can be disabled individually.
-def _flag(name: str, default: str = "true") -> bool:
-    return os.getenv(name, default).lower() in ("1", "true", "yes", "on")
-
-
 # Monday morning: what changed in usage yesterday, before the articles land.
 USAGE_BRIEF_ENABLED = _flag("USAGE_BRIEF_ENABLED")
 USAGE_BRIEF_DAY = int(os.getenv("USAGE_BRIEF_DAY", "0"))        # Monday
